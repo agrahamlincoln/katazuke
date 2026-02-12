@@ -35,14 +35,6 @@ brew install katazuke
 
 ### Arch Linux
 
-Using an AUR helper like `paru`:
-
-```bash
-paru -S https://github.com/agrahamlincoln/aur-katazuke.git
-```
-
-Or manually:
-
 ```bash
 git clone https://github.com/agrahamlincoln/aur-katazuke.git
 cd aur-katazuke
@@ -53,12 +45,12 @@ makepkg -si
 
 ## Features
 
-- 🌿 **Branch Cleanup**: Identify and remove merged branches
-- 📦 **Archive Detection**: Find and remove archived/defunct repository checkouts
-- 🔍 **Directory Validation**: Detect non-git directories in your projects folder
-- 🔄 **Sync Automation**: Keep repositories up-to-date automatically
-- 🗑️ **Stale Branch Detection**: Find abandoned branches (local and remote)
-- ✅ **Safe Operations**: User prompts with justification before any deletion
+- **Branch Cleanup**: Identify and remove merged branches
+- **Archive Detection**: Find and remove archived/defunct repository checkouts
+- **Directory Validation**: Detect non-git directories in your projects folder
+- **Sync Automation**: Keep repositories up-to-date automatically
+- **Stale Branch Detection**: Find abandoned branches (local and remote)
+- **Safe Operations**: User prompts with justification before any deletion
 
 ## Usage
 

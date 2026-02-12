@@ -174,6 +174,7 @@ release VERSION:
 
     # 1. Build release artifacts with explicit version
     echo "1. Building release artifacts..."
+    rm -rf dist
     mkdir -p dist
     release_ldflags="-X main.version={{VERSION}} -X main.commit=$(git rev-parse --short HEAD) -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     GOOS=darwin GOARCH=arm64 go build -ldflags "$release_ldflags" -o dist/{{binary_name}}-darwin-arm64 ./cmd/katazuke
@@ -202,9 +203,8 @@ release VERSION:
     sed -i.bak "/darwin-arm64.tar.gz/,/sha256/ s/sha256 \".*\"/sha256 \"$darwin_sha\"/" "$formula" && rm "$formula.bak"
     sed -i.bak "/linux-amd64.tar.gz/,/sha256/ s/sha256 \".*\"/sha256 \"$linux_sha\"/" "$formula" && rm "$formula.bak"
 
-    # 5. Commit and tag main repo
-    echo "5. Committing release..."
-    git commit --allow-empty -m "chore: release v{{VERSION}}"
+    # 5. Tag main repo (no commit needed - version is set via ldflags)
+    echo "5. Tagging release..."
     git tag -a "v{{VERSION}}" -m "Release v{{VERSION}}"
 
     # 6. Push main repo
@@ -225,7 +225,8 @@ release VERSION:
     gh release download "v{{VERSION}}" \
         --repo agrahamlincoln/katazuke \
         --archive tar.gz \
-        --output dist/release/source.tar.gz
+        --output dist/release/source.tar.gz \
+        --clobber
     source_sha=$(sha256 dist/release/source.tar.gz)
     echo "  source: $source_sha"
 
