@@ -68,7 +68,7 @@ func (c *ReposCmd) runArchived(globals *CLI) error {
 
 	fmt.Printf("Checking archive status of %d repositories...\n", len(repoPaths))
 
-	archived, err := repos.FindArchived(repoPaths, ghClient)
+	archived, err := repos.FindArchived(repoPaths, ghClient, cfg.Sync.Workers)
 	if err != nil {
 		return fmt.Errorf("checking archive status: %w", err)
 	}

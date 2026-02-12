@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+
+	"github.com/agrahamlincoln/katazuke/internal/parallel"
 )
 
 // Status represents the outcome of syncing a single repository.
@@ -54,14 +56,22 @@ type GitOps interface {
 	MergeAbort(repoPath string) error
 }
 
-// All syncs all provided repository paths and returns results.
-func All(repos []string, opts Options, git GitOps) []Result {
-	results := make([]Result, 0, len(repos))
-	for _, repoPath := range repos {
-		result := syncOne(repoPath, opts, git)
-		results = append(results, result)
-	}
-	return results
+// ResultFunc is called sequentially as each repo finishes syncing.
+// completed is the number of repos finished so far; total is the
+// total number of repos being synced.
+type ResultFunc func(completed, total int, result Result)
+
+// All syncs all provided repository paths using the given number of
+// workers and returns results. An optional callback is called
+// sequentially as each repo completes.
+func All(repos []string, opts Options, git GitOps, workers int, onResult ResultFunc) []Result {
+	return parallel.Run(repos, workers, func(repoPath string) Result {
+		return syncOne(repoPath, opts, git)
+	}, func(completed, total int, result Result) {
+		if onResult != nil {
+			onResult(completed, total, result)
+		}
+	})
 }
 
 func syncOne(repoPath string, opts Options, git GitOps) Result {

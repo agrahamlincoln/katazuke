@@ -101,7 +101,7 @@ func TestFindArchived(t *testing.T) {
 	}
 
 	repoPaths := []string{archivedClean, archivedDirty, active, noRemote, gitlab}
-	result, err := repos.FindArchived(repoPaths, checker)
+	result, err := repos.FindArchived(repoPaths, checker, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestFindArchivedAPIError(t *testing.T) {
 		},
 	}
 
-	result, err := repos.FindArchived([]string{errRepo}, checker)
+	result, err := repos.FindArchived([]string{errRepo}, checker, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestFindArchivedAPIError(t *testing.T) {
 func TestFindArchivedEmpty(t *testing.T) {
 	checker := &mockChecker{archived: map[string]bool{}}
 
-	result, err := repos.FindArchived(nil, checker)
+	result, err := repos.FindArchived(nil, checker, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

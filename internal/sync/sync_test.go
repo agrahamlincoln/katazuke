@@ -2,11 +2,16 @@ package sync
 
 import (
 	"fmt"
+	"sync/atomic"
 	"testing"
+
+	gosync "sync"
 )
 
 // mockGitOps implements GitOps for testing.
 type mockGitOps struct {
+	mu gosync.Mutex
+
 	fetchErr       error
 	isClean        bool
 	isCleanErr     error
@@ -36,55 +41,79 @@ type mockGitOps struct {
 }
 
 func (m *mockGitOps) Fetch(repoPath, _ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.fetchCalls = append(m.fetchCalls, repoPath)
 	return m.fetchErr
 }
 
 func (m *mockGitOps) IsClean(_ string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.isClean, m.isCleanErr
 }
 
 func (m *mockGitOps) CurrentBranch(_ string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.currentBranch, m.currentBrErr
 }
 
 func (m *mockGitOps) DefaultBranch(_ string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.defaultBranch, m.defaultBrErr
 }
 
 func (m *mockGitOps) HasRemote(_, _ string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.hasRemote
 }
 
 func (m *mockGitOps) Pull(_ string, strategy string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.pullCalls = append(m.pullCalls, strategy)
 	return m.pullErr
 }
 
 func (m *mockGitOps) MergeBase(_ string, _, _ string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.mergeBase, m.mergeBaseErr
 }
 
 func (m *mockGitOps) MergeTree(_ string, _, _, _ string) (string, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.mergeTreeOut, m.mergeTreeConfl, m.mergeTreeErr
 }
 
 func (m *mockGitOps) StashPush(_ string, message string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.stashPushCalls = append(m.stashPushCalls, message)
 	return m.stashPushErr
 }
 
 func (m *mockGitOps) StashPop(_ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.stashPopCalls++
 	return m.stashPopErr
 }
 
 func (m *mockGitOps) RebaseAbort(_ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.rebaseAbortCalls++
 	return m.rebaseAbortErr
 }
 
 func (m *mockGitOps) MergeAbort(_ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.mergeAbortCalls++
 	return m.mergeAbortErr
 }
@@ -103,7 +132,7 @@ func TestAll_CleanRepo(t *testing.T) {
 	mock := defaultMock()
 	opts := Options{Strategy: "rebase"}
 
-	results := All([]string{"/repos/project"}, opts, mock)
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -125,7 +154,7 @@ func TestAll_NoRemote(t *testing.T) {
 	mock.hasRemote = false
 	opts := Options{Strategy: "rebase"}
 
-	results := All([]string{"/repos/local-only"}, opts, mock)
+	results := All([]string{"/repos/local-only"}, opts, mock, 1, nil)
 
 	r := results[0]
 	if r.Status != Skipped {
@@ -141,7 +170,7 @@ func TestAll_FetchFails(t *testing.T) {
 	mock.fetchErr = fmt.Errorf("network error")
 	opts := Options{Strategy: "rebase"}
 
-	results := All([]string{"/repos/project"}, opts, mock)
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
 
 	r := results[0]
 	if r.Status != Failed {
@@ -154,7 +183,7 @@ func TestAll_NotOnDefaultBranch(t *testing.T) {
 	mock.currentBranch = "feature/work"
 	opts := Options{Strategy: "rebase"}
 
-	results := All([]string{"/repos/project"}, opts, mock)
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
 
 	r := results[0]
 	if r.Status != Skipped {
@@ -167,7 +196,7 @@ func TestAll_DirtySkipDirty(t *testing.T) {
 	mock.isClean = false
 	opts := Options{Strategy: "rebase", SkipDirty: true}
 
-	results := All([]string{"/repos/project"}, opts, mock)
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
 
 	r := results[0]
 	if r.Status != Skipped {
@@ -180,7 +209,7 @@ func TestAll_DirtyAutoStashDisabled(t *testing.T) {
 	mock.isClean = false
 	opts := Options{Strategy: "rebase", AutoStash: false}
 
-	results := All([]string{"/repos/project"}, opts, mock)
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
 
 	r := results[0]
 	if r.Status != Skipped {
@@ -194,7 +223,7 @@ func TestAll_DirtyAutoStashSuccess(t *testing.T) {
 	mock.mergeTreeConfl = false
 	opts := Options{Strategy: "rebase", AutoStash: true}
 
-	results := All([]string{"/repos/project"}, opts, mock)
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
 
 	r := results[0]
 	if r.Status != Synced {
@@ -214,7 +243,7 @@ func TestAll_DirtyAutoStashConflict(t *testing.T) {
 	mock.mergeTreeConfl = true
 	opts := Options{Strategy: "rebase", AutoStash: true}
 
-	results := All([]string{"/repos/project"}, opts, mock)
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
 
 	r := results[0]
 	if r.Status != Skipped {
@@ -232,7 +261,7 @@ func TestAll_DirtyStashPopFails(t *testing.T) {
 	mock.stashPopErr = fmt.Errorf("conflict on pop")
 	opts := Options{Strategy: "rebase", AutoStash: true}
 
-	results := All([]string{"/repos/project"}, opts, mock)
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
 
 	r := results[0]
 	if r.Status != Failed {
@@ -245,7 +274,7 @@ func TestAll_PullFails(t *testing.T) {
 	mock.pullErr = fmt.Errorf("diverged")
 	opts := Options{Strategy: "ff-only"}
 
-	results := All([]string{"/repos/project"}, opts, mock)
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
 
 	r := results[0]
 	if r.Status != Failed {
@@ -257,7 +286,7 @@ func TestAll_DryRun_Clean(t *testing.T) {
 	mock := defaultMock()
 	opts := Options{Strategy: "rebase", DryRun: true}
 
-	results := All([]string{"/repos/project"}, opts, mock)
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
 
 	r := results[0]
 	if r.Status != Skipped {
@@ -274,7 +303,7 @@ func TestAll_DryRun_Dirty(t *testing.T) {
 	mock.mergeTreeConfl = false
 	opts := Options{Strategy: "rebase", AutoStash: true, DryRun: true}
 
-	results := All([]string{"/repos/project"}, opts, mock)
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
 
 	r := results[0]
 	if r.Status != Skipped {
@@ -290,7 +319,7 @@ func TestAll_MultipleRepos(t *testing.T) {
 	opts := Options{Strategy: "rebase"}
 
 	repos := []string{"/repos/a", "/repos/b", "/repos/c"}
-	results := All(repos, opts, mock)
+	results := All(repos, opts, mock, 1, nil)
 
 	if len(results) != 3 {
 		t.Fatalf("expected 3 results, got %d", len(results))
@@ -306,7 +335,7 @@ func TestAll_RepoName(t *testing.T) {
 	mock := defaultMock()
 	opts := Options{Strategy: "rebase"}
 
-	results := All([]string{"/home/user/projects/my-repo"}, opts, mock)
+	results := All([]string{"/home/user/projects/my-repo"}, opts, mock, 1, nil)
 
 	if results[0].RepoName != "my-repo" {
 		t.Errorf("expected repo name 'my-repo', got %q", results[0].RepoName)
@@ -320,7 +349,7 @@ func TestAll_DirtyPullFailsAfterStash_RebaseAbort(t *testing.T) {
 	mock.pullErr = fmt.Errorf("pull failed")
 	opts := Options{Strategy: "rebase", AutoStash: true}
 
-	results := All([]string{"/repos/project"}, opts, mock)
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
 
 	r := results[0]
 	if r.Status != Failed {
@@ -349,7 +378,7 @@ func TestAll_DirtyPullFailsAfterStash_MergeAbort(t *testing.T) {
 	mock.pullErr = fmt.Errorf("pull failed")
 	opts := Options{Strategy: "merge", AutoStash: true}
 
-	results := All([]string{"/repos/project"}, opts, mock)
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
 
 	r := results[0]
 	if r.Status != Failed {
@@ -371,7 +400,7 @@ func TestAll_DirtyPullFailsAfterStash_FFOnlyAbort(t *testing.T) {
 	mock.pullErr = fmt.Errorf("not fast-forward")
 	opts := Options{Strategy: "ff-only", AutoStash: true}
 
-	results := All([]string{"/repos/project"}, opts, mock)
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
 
 	r := results[0]
 	if r.Status != Failed {
@@ -380,5 +409,52 @@ func TestAll_DirtyPullFailsAfterStash_FFOnlyAbort(t *testing.T) {
 	// ff-only uses merge under the hood, so merge --abort should be called.
 	if mock.mergeAbortCalls != 1 {
 		t.Errorf("expected 1 merge abort call, got %d", mock.mergeAbortCalls)
+	}
+}
+
+func TestAll_ParallelMultipleRepos(t *testing.T) {
+	mock := defaultMock()
+	opts := Options{Strategy: "rebase"}
+
+	repos := make([]string, 10)
+	for i := range repos {
+		repos[i] = fmt.Sprintf("/repos/project-%d", i)
+	}
+
+	var callbackCount atomic.Int32
+	results := All(repos, opts, mock, 4, func(_, total int, _ Result) {
+		callbackCount.Add(1)
+		if total != 10 {
+			t.Errorf("expected total=10, got %d", total)
+		}
+	})
+
+	if len(results) != 10 {
+		t.Fatalf("expected 10 results, got %d", len(results))
+	}
+	if callbackCount.Load() != 10 {
+		t.Errorf("expected 10 callbacks, got %d", callbackCount.Load())
+	}
+	for _, r := range results {
+		if r.Status != Synced {
+			t.Errorf("repo %s: expected Synced, got %d: %s", r.RepoName, r.Status, r.Message)
+		}
+	}
+}
+
+func TestAll_ResultCallback(t *testing.T) {
+	mock := defaultMock()
+	opts := Options{Strategy: "rebase"}
+
+	var callbackResults []Result
+	All([]string{"/repos/a", "/repos/b"}, opts, mock, 1, func(_, total int, r Result) {
+		callbackResults = append(callbackResults, r)
+		if total != 2 {
+			t.Errorf("expected total=2, got %d", total)
+		}
+	})
+
+	if len(callbackResults) != 2 {
+		t.Fatalf("expected 2 callback results, got %d", len(callbackResults))
 	}
 }

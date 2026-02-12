@@ -88,7 +88,7 @@ func (c *BranchesCmd) runMerged(globals *CLI) error {
 
 	slog.Debug("found repositories", "count", len(repos))
 
-	merged, err := branches.FindMerged(repos)
+	merged, err := branches.FindMerged(repos, cfg.Sync.Workers)
 	if err != nil {
 		return fmt.Errorf("finding merged branches: %w", err)
 	}

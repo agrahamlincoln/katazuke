@@ -70,41 +70,50 @@ func (c *SyncCmd) Run(globals *CLI) error {
 		Verbose:   globals.Verbose,
 	}
 
-	fmt.Printf("Syncing %d repositories...\n\n", len(repoPaths))
+	workers := cfg.Sync.Workers
+	fmt.Printf("Syncing %d repositories (%d workers)...\n\n", len(repoPaths), workers)
 
-	results := sync.All(repoPaths, opts, sync.RealGitOps{})
-
-	printSyncResults(results, globals.DryRun)
-	return nil
-}
-
-func printSyncResults(results []sync.Result, dryRun bool) {
 	green := color.New(color.FgGreen)
 	yellow := color.New(color.FgYellow)
 	red := color.New(color.FgRed)
 	bold := color.New(color.Bold)
+	dim := color.New(color.FgHiBlack)
 
 	var synced, skipped, failed int
-	for _, r := range results {
+
+	sync.All(repoPaths, opts, sync.RealGitOps{}, workers, func(completed, total int, r sync.Result) {
+		remaining := total - completed
+
+		// Clear the status line, print result, redraw status.
+		fmt.Print("\r\033[2K")
 		switch r.Status {
 		case sync.Synced:
 			synced++
 			fmt.Printf("  %s %s\n", green.Sprint("[synced]"), r.RepoName)
 		case sync.Skipped:
 			skipped++
-			fmt.Printf("  %s %s: %s\n", yellow.Sprint("[skipped]"), r.RepoName, r.Message)
+			fmt.Printf("  %s %s: %s\n", yellow.Sprint("[skip]"), r.RepoName, r.Message)
 		case sync.Failed:
 			failed++
-			fmt.Printf("  %s %s: %s\n", red.Sprint("[failed]"), r.RepoName, r.Message)
+			fmt.Printf("  %s %s: %s\n", red.Sprint("[fail]"), r.RepoName, r.Message)
 		}
-	}
 
+		if remaining > 0 {
+			fmt.Printf("\r\033[2K  %s %d remaining...",
+				dim.Sprintf("[%d/%d]", completed, total),
+				remaining)
+		}
+	})
+
+	// Clear final status line.
+	fmt.Print("\r\033[2K")
 	fmt.Println()
 	summary := fmt.Sprintf("Synced %d, skipped %d, failed %d", synced, skipped, failed)
-	if dryRun {
+	if globals.DryRun {
 		summary += " (dry run)"
 	}
 	fmt.Println(bold.Sprint(summary))
+	return nil
 }
 
 // filterByPattern filters repository paths by matching the base name against

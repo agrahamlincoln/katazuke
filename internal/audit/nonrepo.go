@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agrahamlincoln/katazuke/internal/parallel"
 	"github.com/agrahamlincoln/katazuke/internal/scanner"
 	"github.com/agrahamlincoln/katazuke/pkg/git"
 )
@@ -31,27 +32,37 @@ type Options struct {
 
 // FindNonRepoDirs finds directories under rootPath that are not git repositories.
 // It reads immediate children (respecting .katazuke index files) and returns
-// information about each directory that is not a git repo.
-func FindNonRepoDirs(rootPath string, opts Options) ([]NonRepoDir, error) {
+// information about each directory that is not a git repo. Work is
+// parallelized across the given number of workers.
+func FindNonRepoDirs(rootPath string, opts Options, workers int) ([]NonRepoDir, error) {
 	children, err := listCandidates(rootPath, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	var result []NonRepoDir
+	// Filter to non-repos first (cheap check).
+	var nonRepos []string
 	for _, child := range children {
-		if git.IsRepo(child) {
-			continue
+		if !git.IsRepo(child) {
+			nonRepos = append(nonRepos, child)
 		}
-
-		info, err := inspectDir(child)
-		if err != nil {
-			// Skip directories we can't inspect rather than failing entirely.
-			continue
-		}
-		result = append(result, info)
 	}
 
+	// Inspect non-repo directories in parallel.
+	results := parallel.Run(nonRepos, workers, func(path string) *NonRepoDir {
+		info, err := inspectDir(path)
+		if err != nil {
+			return nil
+		}
+		return &info
+	}, nil)
+
+	var result []NonRepoDir
+	for _, r := range results {
+		if r != nil {
+			result = append(result, *r)
+		}
+	}
 	return result, nil
 }
 

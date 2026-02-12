@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/agrahamlincoln/katazuke/internal/parallel"
 	"github.com/agrahamlincoln/katazuke/pkg/git"
 )
 
@@ -21,55 +22,63 @@ type MergedBranch struct {
 
 // FindMerged scans the given repositories and returns branches that have been
 // merged into each repo's default branch. The current branch and the default
-// branch itself are excluded from results.
-func FindMerged(repos []string) ([]MergedBranch, error) {
-	var results []MergedBranch
+// branch itself are excluded from results. Work is parallelized across the
+// given number of workers.
+func FindMerged(repos []string, workers int) ([]MergedBranch, error) {
+	repoResults := parallel.Run(repos, workers, findMergedInRepo, nil)
 
-	for _, repoPath := range repos {
-		repoName := filepath.Base(repoPath)
+	results := make([]MergedBranch, 0, len(repoResults))
+	for _, rr := range repoResults {
+		results = append(results, rr...)
+	}
+	return results, nil
+}
 
-		defaultBranch, err := git.DefaultBranch(repoPath)
-		if err != nil {
-			slog.Warn("skipping repo: could not determine default branch",
-				"repo", repoName, "error", err)
-			continue
-		}
+func findMergedInRepo(repoPath string) []MergedBranch {
+	repoName := filepath.Base(repoPath)
 
-		currentBranch, err := git.CurrentBranch(repoPath)
-		if err != nil {
-			slog.Warn("skipping repo: could not determine current branch",
-				"repo", repoName, "error", err)
-			continue
-		}
-
-		merged, err := git.MergedBranches(repoPath, defaultBranch)
-		if err != nil {
-			slog.Warn("skipping repo: could not list merged branches",
-				"repo", repoName, "error", err)
-			continue
-		}
-
-		for _, branch := range merged {
-			if branch == defaultBranch || branch == currentBranch {
-				continue
-			}
-
-			commitDate, err := git.CommitDate(repoPath, branch)
-			if err != nil {
-				slog.Warn("could not get commit date, using zero time",
-					"repo", repoName, "branch", branch, "error", err)
-			}
-
-			results = append(results, MergedBranch{
-				RepoPath:   repoPath,
-				RepoName:   repoName,
-				Branch:     branch,
-				LastCommit: commitDate,
-			})
-		}
+	defaultBranch, err := git.DefaultBranch(repoPath)
+	if err != nil {
+		slog.Warn("skipping repo: could not determine default branch",
+			"repo", repoName, "error", err)
+		return nil
 	}
 
-	return results, nil
+	currentBranch, err := git.CurrentBranch(repoPath)
+	if err != nil {
+		slog.Warn("skipping repo: could not determine current branch",
+			"repo", repoName, "error", err)
+		return nil
+	}
+
+	merged, err := git.MergedBranches(repoPath, defaultBranch)
+	if err != nil {
+		slog.Warn("skipping repo: could not list merged branches",
+			"repo", repoName, "error", err)
+		return nil
+	}
+
+	var results []MergedBranch
+	for _, branch := range merged {
+		if branch == defaultBranch || branch == currentBranch {
+			continue
+		}
+
+		commitDate, err := git.CommitDate(repoPath, branch)
+		if err != nil {
+			slog.Warn("could not get commit date, using zero time",
+				"repo", repoName, "branch", branch, "error", err)
+		}
+
+		results = append(results, MergedBranch{
+			RepoPath:   repoPath,
+			RepoName:   repoName,
+			Branch:     branch,
+			LastCommit: commitDate,
+		})
+	}
+
+	return results
 }
 
 // Label returns a display string for the merged branch in the form "repo: branch".

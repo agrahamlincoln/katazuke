@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/agrahamlincoln/katazuke/internal/github"
+	"github.com/agrahamlincoln/katazuke/internal/parallel"
 	"github.com/agrahamlincoln/katazuke/pkg/git"
 )
 
@@ -26,53 +27,62 @@ type ArchivedRepo struct {
 
 // FindArchived scans the given repository paths and checks their GitHub
 // archive status. Repos without a GitHub remote are silently skipped.
-func FindArchived(repos []string, checker ArchiveChecker) ([]ArchivedRepo, error) {
+// Work is parallelized across the given number of workers.
+func FindArchived(repos []string, checker ArchiveChecker, workers int) ([]ArchivedRepo, error) {
+	results := parallel.Run(repos, workers, func(repoPath string) *ArchivedRepo {
+		return checkArchived(repoPath, checker)
+	}, nil)
+
 	var archived []ArchivedRepo
-
-	for _, repoPath := range repos {
-		name := filepath.Base(repoPath)
-
-		if !git.HasRemote(repoPath, "origin") {
-			slog.Debug("skipping repo without origin remote", "repo", name)
-			continue
+	for _, r := range results {
+		if r != nil {
+			archived = append(archived, *r)
 		}
+	}
+	return archived, nil
+}
 
-		remoteURL, err := git.RemoteURL(repoPath, "origin")
-		if err != nil {
-			slog.Debug("could not get remote URL", "repo", name, "error", err)
-			continue
-		}
+func checkArchived(repoPath string, checker ArchiveChecker) *ArchivedRepo {
+	name := filepath.Base(repoPath)
 
-		owner, repo, ok := github.ParseGitHubRemote(remoteURL)
-		if !ok {
-			slog.Debug("not a GitHub remote", "repo", name, "url", remoteURL)
-			continue
-		}
-
-		isArchived, err := checker.IsArchived(owner, repo)
-		if err != nil {
-			slog.Warn("could not check archive status", "repo", name, "error", err)
-			continue
-		}
-
-		if !isArchived {
-			continue
-		}
-
-		clean, err := git.IsClean(repoPath)
-		if err != nil {
-			slog.Warn("could not check working tree status", "repo", name, "error", err)
-			clean = false // assume dirty when in doubt
-		}
-
-		archived = append(archived, ArchivedRepo{
-			Path:    repoPath,
-			Name:    name,
-			Owner:   owner,
-			Repo:    repo,
-			IsClean: clean,
-		})
+	if !git.HasRemote(repoPath, "origin") {
+		slog.Debug("skipping repo without origin remote", "repo", name)
+		return nil
 	}
 
-	return archived, nil
+	remoteURL, err := git.RemoteURL(repoPath, "origin")
+	if err != nil {
+		slog.Debug("could not get remote URL", "repo", name, "error", err)
+		return nil
+	}
+
+	owner, repo, ok := github.ParseGitHubRemote(remoteURL)
+	if !ok {
+		slog.Debug("not a GitHub remote", "repo", name, "url", remoteURL)
+		return nil
+	}
+
+	isArchived, err := checker.IsArchived(owner, repo)
+	if err != nil {
+		slog.Warn("could not check archive status", "repo", name, "error", err)
+		return nil
+	}
+
+	if !isArchived {
+		return nil
+	}
+
+	clean, err := git.IsClean(repoPath)
+	if err != nil {
+		slog.Warn("could not check working tree status", "repo", name, "error", err)
+		clean = false // assume dirty when in doubt
+	}
+
+	return &ArchivedRepo{
+		Path:    repoPath,
+		Name:    name,
+		Owner:   owner,
+		Repo:    repo,
+		IsClean: clean,
+	}
 }

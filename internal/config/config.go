@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -17,6 +18,7 @@ type SyncConfig struct {
 	Strategy  string `yaml:"strategy"`   // "rebase", "merge", or "ff-only"
 	SkipDirty bool   `yaml:"skip_dirty"` // skip dirty repos without merge-tree check
 	AutoStash bool   `yaml:"auto_stash"` // attempt stash/pop for dirty repos
+	Workers   int    `yaml:"workers"`    // number of parallel workers
 }
 
 // Config holds all katazuke configuration.
@@ -39,6 +41,7 @@ func Defaults() Config {
 			Strategy:  "rebase",
 			SkipDirty: false,
 			AutoStash: true,
+			Workers:   min(4, runtime.NumCPU()),
 		},
 	}
 }
@@ -115,6 +118,11 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("KATAZUKE_SYNC_AUTO_STASH"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.Sync.AutoStash = b
+		}
+	}
+	if v := os.Getenv("KATAZUKE_SYNC_WORKERS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Sync.Workers = n
 		}
 	}
 }

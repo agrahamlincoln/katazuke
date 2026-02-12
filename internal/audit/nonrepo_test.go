@@ -66,7 +66,7 @@ func TestFindNonRepoDirs(t *testing.T) {
 		"run.sh":   "#!/bin/bash",
 	})
 
-	result, err := FindNonRepoDirs(root, Options{})
+	result, err := FindNonRepoDirs(root, Options{}, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestFindNonRepoDirs(t *testing.T) {
 func TestFindNonRepoDirsEmpty(t *testing.T) {
 	root := t.TempDir()
 
-	result, err := FindNonRepoDirs(root, Options{})
+	result, err := FindNonRepoDirs(root, Options{}, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestFindNonRepoDirsAllRepos(t *testing.T) {
 	initGitRepo(t, filepath.Join(root, "repo1"))
 	initGitRepo(t, filepath.Join(root, "repo2"))
 
-	result, err := FindNonRepoDirs(root, Options{})
+	result, err := FindNonRepoDirs(root, Options{}, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestFindNonRepoDirsSkipsHidden(t *testing.T) {
 		"file.txt": "visible",
 	})
 
-	result, err := FindNonRepoDirs(root, Options{})
+	result, err := FindNonRepoDirs(root, Options{}, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestFindNonRepoDirsExcludePatterns(t *testing.T) {
 
 	result, err := FindNonRepoDirs(root, Options{
 		ExcludePatterns: []string{"vendor"},
-	})
+	}, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestFindNonRepoDirsWithKatazukeIndex(t *testing.T) {
 	// Create a git repo -- should not appear.
 	initGitRepo(t, filepath.Join(root, "my-repo"))
 
-	result, err := FindNonRepoDirs(root, Options{})
+	result, err := FindNonRepoDirs(root, Options{}, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestNonRepoDirInfo(t *testing.T) {
 		"data/output.json": `{"result": true}`,
 	})
 
-	result, err := FindNonRepoDirs(root, Options{})
+	result, err := FindNonRepoDirs(root, Options{}, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestFindNonRepoDirsSkipsFiles(t *testing.T) {
 		"file.txt": "content",
 	})
 
-	result, err := FindNonRepoDirs(root, Options{})
+	result, err := FindNonRepoDirs(root, Options{}, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

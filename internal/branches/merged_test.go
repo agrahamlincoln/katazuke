@@ -18,7 +18,7 @@ func TestFindMerged_NoMergedBranches(t *testing.T) {
 	repo.Commit("wip commit")
 	repo.Checkout("main")
 
-	results, err := branches.FindMerged([]string{repo.Path})
+	results, err := branches.FindMerged([]string{repo.Path}, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestFindMerged_OneMergedBranch(t *testing.T) {
 	repo.Checkout("main")
 	repo.Merge("feature/done")
 
-	results, err := branches.FindMerged([]string{repo.Path})
+	results, err := branches.FindMerged([]string{repo.Path}, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestFindMerged_ExcludesDefaultAndCurrentBranch(t *testing.T) {
 	repo.Checkout("main")
 	repo.Merge("feature/merged")
 
-	results, err := branches.FindMerged([]string{repo.Path})
+	results, err := branches.FindMerged([]string{repo.Path}, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestFindMerged_MultipleRepos(t *testing.T) {
 	repo2.Checkout("main")
 	repo2.Merge("feature/c")
 
-	results, err := branches.FindMerged([]string{repo1.Path, repo2.Path})
+	results, err := branches.FindMerged([]string{repo1.Path, repo2.Path}, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestFindMerged_CommitDateIsPopulated(t *testing.T) {
 	repo.Checkout("main")
 	repo.Merge("feature/dated")
 
-	results, err := branches.FindMerged([]string{repo.Path})
+	results, err := branches.FindMerged([]string{repo.Path}, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestFindMerged_CommitDateIsPopulated(t *testing.T) {
 }
 
 func TestFindMerged_EmptyRepoList(t *testing.T) {
-	results, err := branches.FindMerged(nil)
+	results, err := branches.FindMerged(nil, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

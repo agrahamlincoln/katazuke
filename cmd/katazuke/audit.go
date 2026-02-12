@@ -50,7 +50,7 @@ func (c *AuditCmd) runNonGit(globals *CLI) error {
 
 	dirs, err := audit.FindNonRepoDirs(projectsDir, audit.Options{
 		ExcludePatterns: cfg.ExcludePatterns,
-	})
+	}, cfg.Sync.Workers)
 	if err != nil {
 		return fmt.Errorf("scanning for non-repo directories: %w", err)
 	}
