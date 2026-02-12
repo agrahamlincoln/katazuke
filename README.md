@@ -45,31 +45,61 @@ makepkg -si
 
 ## Features
 
-- **Branch Cleanup**: Identify and remove merged branches
-- **Archive Detection**: Find and remove archived/defunct repository checkouts
-- **Directory Validation**: Detect non-git directories in your projects folder
-- **Sync Automation**: Keep repositories up-to-date automatically
-- **Stale Branch Detection**: Find abandoned branches (local and remote)
-- **Safe Operations**: User prompts with justification before any deletion
+- **Branch Cleanup**: Identify and remove merged branches across all repos
+- **Archive Detection**: Find and remove archived/defunct repository checkouts via GitHub API
+- **Directory Audit**: Detect non-git directories in your projects folder with size/content summary
+- **Sync Automation**: Keep repositories up-to-date with smart conflict detection
+- **Safe Operations**: Interactive prompts with justification before any deletion, dry-run mode
+- **Configuration**: YAML config file with environment variable overrides
+
+**Planned**:
+- Stale branch detection (abandoned branches with no recent commits)
 
 ## Usage
 
 ```bash
-# Run full workspace audit
-katazuke audit
-
-# Clean up merged branches
+# Clean up merged branches across all repos
 katazuke branches --merged
 
-# Remove archived repositories
+# Remove archived GitHub repository checkouts
 katazuke repos --archived
 
-# Update all repositories
+# Find non-git directories in your projects folder
+katazuke audit --non-git
+
+# Sync all repositories (fetch + pull)
 katazuke sync
 
-# Find stale branches
-katazuke branches --stale
+# Sync only repos matching a pattern
+katazuke sync --pattern "*kafka*"
+
+# Preview what would happen without making changes
+katazuke branches --merged --dry-run
 ```
+
+### Global Flags
+
+- `--dry-run` / `-n`: Show what would be done without making changes
+- `--verbose` / `-v`: Enable debug logging
+- `--projects-dir` / `-p`: Override the projects directory (default: `~/projects`)
+
+## Configuration
+
+katazuke looks for a config file at `$XDG_CONFIG_HOME/katazuke/config.yaml` (or `~/.config/katazuke/config.yaml`).
+
+```yaml
+projects_dir: ~/projects
+stale_threshold_days: 30
+exclude_patterns:
+  - ".archive"
+  - "vendor"
+sync:
+  strategy: rebase    # rebase, merge, or ff-only
+  skip_dirty: false
+  auto_stash: true
+```
+
+All options can be overridden via environment variables prefixed with `KATAZUKE_` (e.g., `KATAZUKE_SYNC_STRATEGY=ff-only`). GitHub authentication uses `gh` CLI config, or falls back to `GITHUB_TOKEN` / `GH_TOKEN`.
 
 ## Workflow Context
 
@@ -154,6 +184,18 @@ This workflow can leave 50+ stale branches across local checkouts and forks, mak
 The tool is also **defensive by design**: it detects when your actual workflow has deviated from these patterns and avoids destructive actions that could disrupt your work.
 
 ## Development
+
+Build and development tasks are managed with [just](https://github.com/casey/just):
+
+```bash
+just setup        # Check dependencies
+just build        # Build for local platform
+just test         # Run unit tests
+just test-e2e     # Run end-to-end tests
+just lint         # Run golangci-lint
+just release VER  # Full release automation
+just --list       # See all available commands
+```
 
 See [PRD.md](PRD.md) for product requirements and design decisions.
 

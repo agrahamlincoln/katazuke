@@ -12,193 +12,121 @@ This tool is **intentionally tailored** to a specific workflow (see README.md "W
 
 ### Quality First
 
-- No emojis in code, scripts, or automation
+- No emojis in code, scripts, or automation output
 - Fix code issues rather than suppressing linter warnings
-- Maintain high code quality from the start - don't compromise
+- Maintain high code quality from the start
+
+### Safety First
+
+The tool is **defensive by design**: detect when actual workflow differs from expected patterns. Never take destructive actions if workflow doesn't match expectations. Never lose uncommitted work. Never leave repos in a conflicted state.
 
 ## Workflow Context
 
 **Primary workflow**: PR-based development with feature branches (`graham/<name>` for private repos)
 
-**The problem we solve**: Local branches that never get cleaned up after PRs are merged, leading to 50+ stale branches with meaningless short names.
+**The problem we solve**: Local branches that never get cleaned up after PRs are merged, leading to 50+ stale branches with meaningless short names. Also: archived repos taking up space, non-git clutter, and repos falling behind upstream.
 
-**Not supported**: Other workflows, other version control systems, cloud sync, backup features. See PRD.md for explicit non-goals.
+**Not supported**: Other workflows, other version control systems, cloud sync, backup features, team/org features. See PRD.md for explicit non-goals.
 
-## Repository Structure
+## Repository & Release Structure
 
-### Main Repository
-- **Purpose**: Source code only
-- **Location**: `agrahamlincoln/katazuke`
-- **Contents**: Go code, tests, justfile, documentation
+### Main Repository (`agrahamlincoln/katazuke`)
+- Source code only (Go code, tests, justfile, documentation)
 
-### Packaging Repositories
-- **Homebrew**: `agrahamlincoln/homebrew-katazuke` (follows Homebrew tap convention)
-- **AUR**: `agrahamlincoln/aur-katazuke` (personal package, not on official AUR)
+### Packaging Repositories (sibling directories)
+- **Homebrew**: `agrahamlincoln/homebrew-katazuke` (expected at `~/projects/homebrew-katazuke`)
+- **AUR**: `agrahamlincoln/aur-katazuke` (expected at `~/projects/aur-katazuke`, personal package)
 
-**Why separate?**: Clean separation of concerns, follows ecosystem conventions, avoids chicken-and-egg checksum problems, keeps packaging history out of main repo.
+Packaging lives in separate repos to follow ecosystem conventions, avoid checksum chicken-and-egg problems, and keep packaging history out of the main repo. The release script (`just release VERSION`) updates both automatically.
 
-**Local clones**: Expected at `~/projects/homebrew-katazuke` and `~/projects/aur-katazuke` (sibling directories). The release process requires these.
-
-## Platform Support
-
-**Supported**:
-- macOS: darwin-arm64 (Apple Silicon only - developer's machine)
+### Platform Support
+- macOS: darwin-arm64 (Apple Silicon only)
 - Linux: linux-amd64 (x86_64 only)
+- No CI/CD: Manual releases via `just release VERSION` using `gh` CLI
 
-**Not supported**: Intel Macs, ARM Linux - developer doesn't have these devices.
-
-## Development Tools
+## Development
 
 ### Build System
-- **Primary**: `just` (justfile) - all development tasks
+- **Primary**: `just` (justfile) -- run `just --list` for all commands
 - **Removed**: Makefile (deleted, do not recreate)
-- **Key commands**: `just setup`, `just build`, `just test`, `just lint`, `just release VERSION`
+- Key: `just build`, `just test`, `just lint`, `just test-e2e`, `just release VERSION`
 
 ### Testing
-- **Unit tests**: Standard Go tests (`*_test.go`)
+- **Unit tests**: Standard Go tests (`*_test.go`) alongside source
 - **E2E tests**: Build tag `e2e`, located in `test/e2e/`
-- **Test helpers**: `test/helpers/git.go` - creates git repos with backdated commits for testing stale detection
-- **Key insight**: Use `CommitWithDate()` to test 30-day thresholds without waiting 30 days
+- **Test helpers**: `test/helpers/git.go` -- creates git repos with backdated commits for testing time-based thresholds without waiting
+- **Key insight**: Use `CommitWithDate()` to test staleness thresholds
 
 ### Linting
-- **Tool**: golangci-lint (comprehensive config in `.golangci.yaml`)
+- **Tool**: golangci-lint (config in `.golangci.yaml`)
 - **Formatters**: gofmt, goimports (separate from linters in config)
 - **Strategy**: Fix issues, don't suppress them (no nolint comments unless absolutely necessary with explanation)
 
-### Release Process
+### Dependencies
+Dependencies are in `go.mod`. Key choices worth noting:
+- **CLI parsing**: kong (not cobra)
+- **Interactive prompts**: charmbracelet/huh
+- **GitHub API**: cli/go-gh (leverages `gh` CLI auth, not go-github)
+- **Git operations**: Shells out to git CLI via `pkg/git/` (not go-git)
 
-**Fully automated** via `just release VERSION`:
-1. Builds for both platforms
-2. Creates tarballs, calculates SHA256s
-3. Updates Homebrew formula in `../homebrew-katazuke`
-4. Commits, tags, pushes main repo
-5. Creates GitHub release
-6. Downloads source tarball, calculates SHA256
-7. Updates PKGBUILD in `../aur-katazuke`
-8. Commits and pushes both packaging repos
+## Project Layout
 
-**Dependencies**: `gh` CLI for creating releases
+Standard Go project layout: `cmd/`, `internal/`, `pkg/`, `test/`. Each command (`branches`, `repos`, `audit`, `sync`) has a corresponding file in `cmd/katazuke/` and business logic in `internal/`.
 
-**No CI/CD**: Manual releases only, no GitHub Actions. This is intentional for a personal tool.
+Key conventions:
+- `internal/scanner/` handles repository discovery using `.katazuke` index files
+- `internal/config/` handles layered configuration: defaults -> config file -> env vars -> CLI flags
+- `pkg/git/` is the shared git wrapper (shells out, not a library)
+- Config file location: `$XDG_CONFIG_HOME/katazuke/config.yaml`
+- Env var prefix: `KATAZUKE_*`
+- GitHub token: `gh` CLI auth -> `KATAZUKE_GITHUB_TOKEN` -> `GITHUB_TOKEN` / `GH_TOKEN`
 
-## Metrics Philosophy
+## Architecture Patterns
 
-**Core principle**: Only track metrics that inform specific improvements to katazuke.
-
-**The actionability test**: Before adding a metric, ask: "If this metric shows an unexpected pattern, what specific change would we make to katazuke?" If the answer is unclear, don't track it.
-
-**What we track**:
-1. Acceptance rate by action type → identifies broken features
-2. Repeat offenders → identifies false positives
-3. Command usage → guides development priorities
-4. Performance metrics → keeps tool fast
-5. Age distribution → tunes thresholds
-6. Impact counters → motivational only
-
-**Storage**: Local only (`~/.local/share/katazuke/metrics/`), JSONL format, versioned schema, ~730KB/year
-
-See PRD.md "Success Metrics" for full rationale.
+- **Interface-based testing**: Core operations (git, GitHub API) are behind interfaces so business logic can be tested with mocks. See `internal/sync/` for the most thorough example.
+- **Config layering**: Defaults -> file -> env vars -> CLI flags. All in `internal/config/`.
+- **Progress callbacks**: Commands pass a `ProgressFunc` to display real-time status.
+- **Scanner with .katazuke index**: Repository discovery respects `.katazuke` YAML files that define `groups` (subdirs to scan) and `ignores` (subdirs to skip). Without an index file, immediate children are assumed to be repos.
 
 ## Code Standards
 
 ### Commit Messages
-- Use conventional commits format
-- Subject: <72 characters
-- Body lines: <80 characters
-- Focus on why/what-changed, not how (implementation details in code)
-- Examine git diff to understand actual changes
+- Conventional commits format
+- Subject: <72 characters, body lines: <80 characters
+- Focus on why/what-changed, not how
 
 ### Comments
-- Explain "why" (intent, business logic), not "what" (code is self-documenting)
+- Explain "why" (intent, business logic), not "what"
 - **Exception**: Go doc comments MUST start with symbol name (Go convention)
-- No redundant comments (don't restate function signatures)
-- Keep comments updated with code changes
+- No redundant comments; keep comments updated with code changes
 
 ### Go Idioms
-- Follow standard Go project layout (`cmd/`, `internal/`, `pkg/`)
-- Use `golangci-lint` - comprehensive linter set enabled
+- Follow standard Go project layout
+- Use `golangci-lint` -- comprehensive linter set enabled
 - Prefer small, focused functions
-- Avoid over-engineering (no premature abstractions)
-
-## Directory Structure
-
-```
-katazuke/
-├── cmd/katazuke/          # CLI entry point (main.go)
-├── internal/              # Private packages (will have: audit/, branches/, repos/, sync/, config/)
-├── pkg/git/              # Reusable git operations (importable)
-├── test/
-│   ├── e2e/              # E2E tests (build tag: e2e)
-│   └── helpers/          # Test utilities (git repo creation, etc.)
-├── justfile              # Build automation (replaces Makefile)
-├── PRD.md               # Product requirements (comprehensive design doc)
-├── README.md            # User-facing documentation
-└── CLAUDE.md            # This file
-```
-
-## Common Patterns
-
-### `.katazuke` Index Files
-
-**Purpose**: Marks directories that organize repos/groups (not repos themselves)
-
-**Format**: YAML with strict schema (only `groups` and `ignores` fields allowed)
-
-**Behavior**:
-- If present → scan subdirectories listed in `groups`, ignore listed in `ignores`
-- If absent → assume immediate children are repositories (stop recursion)
-- Allows unlimited nesting depth without arbitrary limits
-
-**Example**:
-```yaml
-groups:
-  - work
-  - oss
-ignores:
-  - archive
-  - tmp
-```
-
-### Workflow Detection
-
-The tool should be **defensive** and detect when actual workflow differs from expected patterns. Never take destructive actions if workflow doesn't match expectations.
+- Avoid over-engineering
 
 ## What NOT to Do
 
-- ❌ Add emojis anywhere (code, scripts, justfile, output)
-- ❌ Add support for GitLab/Bitbucket/other VCS
-- ❌ Add web dashboards or GUIs
-- ❌ Add cloud sync or backup features
-- ❌ Add team/organization features
-- ❌ Add ML-based detection
-- ❌ Make the tool work for workflows other than the documented one
-- ❌ Suppress linter warnings without fixing the actual issue
-- ❌ Create files unless explicitly necessary (prefer editing existing)
-- ❌ Add features for hypothetical future requirements
+- Add emojis anywhere (code, scripts, justfile, output)
+- Add support for GitLab/Bitbucket/other VCS
+- Add web dashboards or GUIs
+- Add cloud sync or backup features
+- Add team/organization features
+- Add ML-based detection
+- Make the tool work for workflows other than the documented one
+- Suppress linter warnings without fixing the actual issue
+- Create files unless explicitly necessary (prefer editing existing)
+- Add features for hypothetical future requirements
+- Recreate the Makefile
 
-## Key Files
+## Metrics Philosophy
 
-- **PRD.md**: Source of truth for all design decisions, comprehensive
-- **README.md**: User-facing docs, workflow context
-- **justfile**: All development automation (build, test, lint, release)
-- **test/helpers/git.go**: Critical for E2E testing (date manipulation)
-- **.golangci.yaml**: Comprehensive linting config (formatters separate from linters)
+Only track metrics that inform specific improvements to katazuke. Before adding a metric, ask: "If this metric shows an unexpected pattern, what specific change would we make to katazuke?" If the answer is unclear, don't track it.
 
-## Current State
+Storage: Local only (`~/.local/share/katazuke/metrics/`), JSONL format, versioned schema. See PRD.md "Success Metrics" for full rationale.
 
-**Phase 0**: Developer environment foundation
-- ✅ Basic CLI with stub commands
-- ✅ Testing infrastructure (unit + e2e framework)
-- ✅ Justfile with full automation
-- ✅ Linting configuration
-- ✅ Packaging repos created and populated (`homebrew-katazuke`, `aur-katazuke`)
-- ✅ Release automation updated to work with sibling packaging repos
-- ⏳ No core features implemented yet
-
-**Next steps**:
-1. Begin implementing Phase 1 features (branch cleanup, archived repo detection)
-
-## Questions to Ask
+## Design Checklist
 
 When implementing features, consider:
 1. Does this align with the opinionated workflow?
@@ -207,9 +135,8 @@ When implementing features, consider:
 4. Is this the simplest possible implementation?
 5. Have we tested this with backdated git commits?
 
-## Resources
+## Key References
 
-- PRD.md: Complete product requirements and design decisions
-- README.md: User documentation and workflow context
-- justfile: `just --list` shows all available commands
-- Reference repos: `~/projects/squirrel-bot` and `~/projects/freshfire` (for Go patterns, justfile structure)
+- **PRD.md**: Product requirements and design decisions (user journeys and metrics philosophy are authoritative; some technical details like dependencies were updated during implementation and may not match)
+- **README.md**: User-facing documentation and workflow context
+- **justfile**: `just --list` for all development commands

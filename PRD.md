@@ -157,43 +157,49 @@
   - Single binary deployment
   - Excellent cross-platform support
   - Strong standard library for file operations
-  - Good CLI framework ecosystem (cobra)
+  - Good CLI framework ecosystem
   - Fast execution
 
 ### Architecture
 
 ```
 katazuke/
-├── cmd/
-│   └── katazuke/
-│       └── main.go           # CLI entry point
+├── cmd/katazuke/              # CLI entry point and command definitions
+│   ├── main.go                # CLI structure (kong), version, top-level flags
+│   ├── branches.go            # branches --merged / --stale commands
+│   ├── repos.go               # repos --archived command
+│   ├── audit.go               # audit --non-git command
+│   └── sync.go                # sync command
 ├── internal/
-│   ├── audit/                # Workspace auditing logic
-│   ├── branches/             # Branch management
-│   ├── repos/                # Repository operations
-│   ├── sync/                 # Sync/update operations
-│   ├── github/               # GitHub API client
-│   └── config/               # Configuration management
+│   ├── audit/                 # Non-repo directory detection
+│   ├── branches/              # Merged branch detection
+│   ├── config/                # Configuration management
+│   ├── github/                # GitHub API client
+│   ├── repos/                 # Archived repo detection
+│   ├── scanner/               # Repository discovery (.katazuke index)
+│   └── sync/                  # Sync with conflict detection
 ├── pkg/
-│   └── git/                  # Reusable git operations
-├── homebrew/                 # Homebrew formula
-├── aur/                      # AUR package files
-└── docs/
+│   └── git/                   # Reusable git operations (shells out to git CLI)
+└── test/
+    ├── e2e/                   # E2E tests (build tag: e2e)
+    └── helpers/               # Test utilities (git repo creation)
 ```
+
+Packaging lives in separate repositories (see Packaging section below).
 
 ### Dependencies
 
-- `github.com/spf13/cobra` - CLI framework
-- `github.com/go-git/go-git/v5` - Git operations (or shell out to git CLI)
-- `github.com/google/go-github/v58` - GitHub API client
+- `github.com/alecthomas/kong` - CLI framework
+- `github.com/charmbracelet/huh` - Interactive prompts
+- `github.com/cli/go-gh/v2` - GitHub API client (leverages gh CLI auth)
 - `github.com/fatih/color` - Colored terminal output
-- `github.com/AlecAivazis/survey/v2` - Interactive prompts
+- `github.com/goccy/go-yaml` - YAML parsing
 
 ### Configuration
 
-Support configuration via:
-1. `~/.config/katazuke/config.yaml` - User preferences
-2. `~/.katazukerc` - Legacy support
+Support configuration via (highest priority last):
+1. Built-in defaults
+2. `$XDG_CONFIG_HOME/katazuke/config.yaml` (or `~/.config/katazuke/config.yaml`)
 3. Environment variables (`KATAZUKE_*`)
 4. CLI flags (highest priority)
 
@@ -201,20 +207,17 @@ Support configuration via:
 ```yaml
 projects_dir: ~/projects
 stale_threshold_days: 30  # Branch considered stale if no commits in N days
-github_token: ghp_xxx  # Optional, for higher API limits
+github_token: ghp_xxx     # Also: KATAZUKE_GITHUB_TOKEN, GITHUB_TOKEN, GH_TOKEN
 exclude_patterns:
   - ".archive"
   - "vendor"
-prompts:
-  batch_operations: true
-  confirm_deletions: true
-backup:
-  enabled: true
-  location: ~/katazuke-backups
 sync:
-  strategy: rebase  # 'rebase', 'merge', or 'ff-only'
-  skip_dirty: true  # Skip repos with uncommitted changes
+  strategy: rebase    # 'rebase', 'merge', or 'ff-only'
+  skip_dirty: false   # If true, skip dirty repos without merge-tree check
+  auto_stash: true    # If true, attempt stash/pop for dirty repos
 ```
+
+**Environment variable overrides**: `KATAZUKE_PROJECTS_DIR`, `KATAZUKE_STALE_THRESHOLD_DAYS`, `KATAZUKE_SYNC_STRATEGY`, `KATAZUKE_SYNC_SKIP_DIRTY`, `KATAZUKE_SYNC_AUTO_STASH`
 
 ### Directory Structure Support
 
@@ -398,14 +401,13 @@ sync:
 
 ### GitHub API Integration
 
-**Client**: Use official Go GitHub client library (`github.com/google/go-github/v58`)
-- No dependency on `gh` CLI being installed
-- Better type safety and error handling
-- Direct control over API requests
+**Client**: Uses `github.com/cli/go-gh/v2` which leverages `gh` CLI authentication
+- Piggybacks on user's existing `gh` CLI config for auth
+- Falls back to explicit token or unauthenticated access
 
 **Authentication** (in order of precedence):
-1. Personal access token from config file (`github_token`)
-2. Environment variable (`GITHUB_TOKEN` or `GH_TOKEN`)
+1. `gh` CLI config (if `gh` is installed and authenticated)
+2. Personal access token from config file or env (`KATAZUKE_GITHUB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`)
 3. Unauthenticated (lower rate limits, public repos only)
 
 **Features**:
@@ -444,14 +446,12 @@ sync:
 
 ### Build Process
 
-- GitHub Actions for CI/CD
-- Build binaries for multiple platforms:
-  - `linux/amd64`
-  - `linux/arm64`
-  - `darwin/amd64` (Intel Mac)
+- **No CI/CD**: Manual releases only via `just release VERSION` (intentional for a personal tool)
+- Build binaries for supported platforms only:
   - `darwin/arm64` (Apple Silicon)
-- Attach binaries to GitHub releases
-- Automated Homebrew formula updates
+  - `linux/amd64` (x86_64)
+- Attach binaries to GitHub releases via `gh` CLI
+- Automated Homebrew formula and AUR PKGBUILD updates
 
 ## Success Metrics
 
@@ -654,18 +654,14 @@ All analytics remain **local-only** and **optional**.
 - Scripts that mimic CI tasks (build, test, package)
 - Can be triggered manually: `just release 0.1.0`
 
-### Minimal Viable Binary
+### Minimal Viable Binary (COMPLETE)
 
-**Before core features, implement**:
-1. Basic CLI structure (cobra)
+1. Basic CLI structure (kong)
 2. Help text (`katazuke --help`)
 3. Version command (`katazuke version`)
-4. Stub commands for planned features
-5. Set up packaging repositories (`homebrew-katazuke`, `aur-katazuke`)
-6. Successful packaging for Homebrew and AUR
-7. Installation and execution on both macOS and Linux
-
-**Goal**: Prove the packaging and distribution works before investing in features.
+4. Packaging repositories (`homebrew-katazuke`, `aur-katazuke`)
+5. Successful packaging for Homebrew and AUR
+6. Installation and execution on both macOS and Linux
 
 ### Release Automation
 
@@ -683,10 +679,10 @@ All analytics remain **local-only** and **optional**.
 
 **No manual steps required** - developer only runs `just release 0.2.0`
 
-## Timeline (Proposed)
+## Timeline
 
-- **Phase 0** (Foundation): Developer environment, testing infrastructure, packaging
-- **Phase 1** (MVP): Branch cleanup + archived repo detection
-- **Phase 2**: Sync automation + non-git directory detection
-- **Phase 3**: Stale branch detection + configuration system
+- **Phase 0** (Foundation): Developer environment, testing infrastructure, packaging -- COMPLETE
+- **Phase 1** (MVP): Branch cleanup (merged) + archived repo detection -- COMPLETE
+- **Phase 2**: Sync automation + non-git directory audit + configuration system -- COMPLETE
+- **Phase 3**: Stale branch detection + remote branch cleanup + metrics -- NOT STARTED
 - **Phase 4**: Polish, documentation
