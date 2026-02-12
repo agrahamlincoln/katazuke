@@ -233,7 +233,9 @@ release VERSION:
     # 9. Update AUR PKGBUILD in sibling repo
     echo "9. Updating AUR PKGBUILD..."
     pkgbuild="$aur_repo/PKGBUILD"
+    release_commit=$(git rev-parse --short HEAD)
     sed -i.bak "s/^pkgver=.*/pkgver={{VERSION}}/" "$pkgbuild" && rm "$pkgbuild.bak"
+    sed -i.bak "s/^_commit=.*/_commit=$release_commit/" "$pkgbuild" && rm "$pkgbuild.bak"
     sed -i.bak "s/^sha256sums=.*/sha256sums=('$source_sha')/" "$pkgbuild" && rm "$pkgbuild.bak"
 
     # 10. Commit and push homebrew-katazuke
