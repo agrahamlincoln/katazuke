@@ -3,9 +3,20 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
-	"github.com/spf13/cobra"
+	"github.com/alecthomas/kong"
+	"github.com/charmbracelet/huh"
+	"github.com/fatih/color"
+
+	"github.com/agrahamlincoln/katazuke/internal/branches"
+	"github.com/agrahamlincoln/katazuke/internal/config"
+	"github.com/agrahamlincoln/katazuke/internal/scanner"
+	"github.com/agrahamlincoln/katazuke/pkg/git"
 )
 
 var (
@@ -14,86 +25,249 @@ var (
 	date    = "unknown"
 )
 
-func main() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+// CLI defines the top-level command structure for katazuke.
+type CLI struct {
+	DryRun      bool   `name:"dry-run" short:"n" help:"Show what would be done without making changes."`
+	Verbose     bool   `name:"verbose" short:"v" help:"Verbose output."`
+	ProjectsDir string `name:"projects-dir" short:"p" help:"Projects directory." default:"~/projects" env:"KATAZUKE_PROJECTS_DIR"`
+
+	Branches BranchesCmd `cmd:"" help:"Manage branches across repositories."`
+	Repos    ReposCmd    `cmd:"" help:"Manage repository checkouts."`
+	Audit    AuditCmd    `cmd:"" help:"Run full workspace audit."`
+	Sync     SyncCmd     `cmd:"" help:"Sync all repositories."`
+	Version  VersionCmd  `cmd:"" help:"Show version information."`
+}
+
+// BranchesCmd handles branch management across repositories.
+type BranchesCmd struct {
+	Merged    bool `help:"Show only merged branches." xor:"mode"`
+	Stale     bool `help:"Show only stale branches." xor:"mode"`
+	StaleDays int  `name:"stale-days" help:"Days before a branch is considered stale." default:"30"`
+}
+
+// Run executes the branches command.
+func (c *BranchesCmd) Run(globals *CLI) error {
+	if !c.Merged && !c.Stale {
+		return fmt.Errorf("specify --merged or --stale")
+	}
+
+	if c.Merged {
+		return c.runMerged(globals)
+	}
+
+	// --stale not yet implemented
+	fmt.Println("Stale branch detection not yet implemented.")
+	return nil
+}
+
+func (c *BranchesCmd) runMerged(globals *CLI) error {
+	if globals.Verbose {
+		slog.SetLogLoggerLevel(slog.LevelDebug)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	projectsDir := globals.ProjectsDir
+	if projectsDir == "" || projectsDir == "~/projects" {
+		projectsDir = cfg.ProjectsDir
+	} else {
+		projectsDir = expandHome(projectsDir)
+	}
+
+	slog.Debug("scanning for repositories", "dir", projectsDir)
+
+	repos, err := scanner.Scan(projectsDir, scanner.Options{
+		ExcludePatterns: cfg.ExcludePatterns,
+	})
+	if err != nil {
+		return fmt.Errorf("scanning repositories: %w", err)
+	}
+
+	slog.Debug("found repositories", "count", len(repos))
+
+	merged, err := branches.FindMerged(repos)
+	if err != nil {
+		return fmt.Errorf("finding merged branches: %w", err)
+	}
+
+	if len(merged) == 0 {
+		fmt.Println("No merged branches found.")
+		return nil
+	}
+
+	printMergedSummary(merged)
+
+	if globals.DryRun {
+		return nil
+	}
+
+	selected, err := promptForDeletion(merged)
+	if err != nil {
+		return err
+	}
+
+	if len(selected) == 0 {
+		fmt.Println("No branches selected for deletion.")
+		return nil
+	}
+
+	return deleteSelectedBranches(selected)
+}
+
+func printMergedSummary(merged []branches.MergedBranch) {
+	bold := color.New(color.Bold)
+	dim := color.New(color.FgHiBlack)
+
+	fmt.Printf("\n%s\n\n", bold.Sprintf("Found %d merged branch(es):", len(merged)))
+
+	currentRepo := ""
+	for _, m := range merged {
+		if m.RepoName != currentRepo {
+			currentRepo = m.RepoName
+			fmt.Printf("  %s\n", bold.Sprint(m.RepoName))
+		}
+		age := formatAge(m.LastCommit)
+		fmt.Printf("    %s  %s\n", m.Branch, dim.Sprintf("(%s)", age))
+	}
+	fmt.Println()
+}
+
+func promptForDeletion(merged []branches.MergedBranch) ([]branches.MergedBranch, error) {
+	options := make([]huh.Option[int], len(merged))
+	for i, m := range merged {
+		options[i] = huh.NewOption(m.Label(), i)
+	}
+
+	var selectedIndices []int
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewMultiSelect[int]().
+				Title("Select branches to delete").
+				Options(options...).
+				Value(&selectedIndices),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return nil, fmt.Errorf("prompt failed: %w", err)
+	}
+
+	selected := make([]branches.MergedBranch, len(selectedIndices))
+	for i, idx := range selectedIndices {
+		selected[i] = merged[idx]
+	}
+	return selected, nil
+}
+
+func deleteSelectedBranches(selected []branches.MergedBranch) error {
+	var failed []string
+
+	for _, m := range selected {
+		slog.Debug("deleting branch", "repo", m.RepoName, "branch", m.Branch)
+		if err := git.DeleteLocalBranch(m.RepoPath, m.Branch, false); err != nil {
+			fmt.Printf("  failed to delete %s in %s: %v\n", m.Branch, m.RepoName, err)
+			failed = append(failed, m.Label())
+			continue
+		}
+		fmt.Printf("  deleted %s in %s\n", m.Branch, m.RepoName)
+	}
+
+	fmt.Println()
+	deleted := len(selected) - len(failed)
+	if deleted > 0 {
+		fmt.Println(color.New(color.Bold).Sprintf("Deleted %d branch(es).", deleted))
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("failed to delete %d branch(es): %s",
+			len(failed), strings.Join(failed, ", "))
+	}
+	return nil
+}
+
+func formatAge(t time.Time) string {
+	if t.IsZero() {
+		return "unknown date"
+	}
+	days := int(time.Since(t).Hours() / 24)
+	switch {
+	case days == 0:
+		return "today"
+	case days == 1:
+		return "1 day ago"
+	case days < 30:
+		return fmt.Sprintf("%d days ago", days)
+	case days < 365:
+		months := days / 30
+		if months == 1 {
+			return "1 month ago"
+		}
+		return fmt.Sprintf("%d months ago", months)
+	default:
+		years := days / 365
+		if years == 1 {
+			return "1 year ago"
+		}
+		return fmt.Sprintf("%d years ago", years)
 	}
 }
 
-var rootCmd = &cobra.Command{
-	Use:   "katazuke",
-	Short: "Developer workspace maintenance tool",
-	Long: `katazuke (片付け) - "tidying up"
+func expandHome(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		return filepath.Join(home, path[2:])
+	}
+	return path
+}
+
+// AuditCmd handles workspace auditing.
+type AuditCmd struct {
+	NonGit bool `name:"non-git" help:"Show only non-git directories."`
+}
+
+// Run executes the audit command.
+func (c *AuditCmd) Run(globals *CLI) error {
+	slog.Debug("audit", "projects_dir", globals.ProjectsDir, "dry_run", globals.DryRun)
+	return fmt.Errorf("audit command is not yet implemented")
+}
+
+// SyncCmd handles repository synchronization.
+type SyncCmd struct{}
+
+// Run executes the sync command.
+func (c *SyncCmd) Run(globals *CLI) error {
+	slog.Debug("sync", "projects_dir", globals.ProjectsDir, "dry_run", globals.DryRun)
+	return fmt.Errorf("sync command is not yet implemented")
+}
+
+// VersionCmd shows version information.
+type VersionCmd struct{}
+
+// Run executes the version command.
+func (c *VersionCmd) Run() error {
+	fmt.Printf("katazuke %s (commit: %s, built: %s)\n", version, commit, date)
+	return nil
+}
+
+func main() {
+	var cli CLI
+	ctx := kong.Parse(&cli,
+		kong.Name("katazuke"),
+		kong.Description(`katazuke (片付け) - "tidying up"
 
 A developer workspace maintenance tool that helps you keep your ~/projects
 directory clean and organized by managing stale branches, archived repositories,
-and out-of-date checkouts.`,
-	Version: fmt.Sprintf("%s (commit: %s, built: %s)", version, commit, date),
-}
-
-func init() {
-	rootCmd.AddCommand(auditCmd)
-	rootCmd.AddCommand(branchesCmd)
-	rootCmd.AddCommand(reposCmd)
-	rootCmd.AddCommand(syncCmd)
-
-	// Global flags
-	rootCmd.PersistentFlags().BoolP("dry-run", "n", false, "Show what would be done without making changes")
-	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Verbose output")
-	rootCmd.PersistentFlags().StringP("projects-dir", "p", "", "Projects directory (default: ~/projects)")
-}
-
-var auditCmd = &cobra.Command{
-	Use:   "audit",
-	Short: "Run full workspace audit",
-	Long:  "Scan the projects directory and report on all potential cleanup opportunities",
-	Run: func(_ *cobra.Command, _ []string) {
-		fmt.Println("Running workspace audit...")
-		fmt.Println("(Implementation coming soon)")
-	},
-}
-
-var branchesCmd = &cobra.Command{
-	Use:   "branches",
-	Short: "Manage branches across repositories",
-	Long:  "Find and clean up merged or stale branches",
-	Run: func(_ *cobra.Command, _ []string) {
-		fmt.Println("Analyzing branches...")
-		fmt.Println("(Implementation coming soon)")
-	},
-}
-
-var reposCmd = &cobra.Command{
-	Use:   "repos",
-	Short: "Manage repository checkouts",
-	Long:  "Find and remove archived or defunct repository checkouts",
-	Run: func(_ *cobra.Command, _ []string) {
-		fmt.Println("Analyzing repositories...")
-		fmt.Println("(Implementation coming soon)")
-	},
-}
-
-var syncCmd = &cobra.Command{
-	Use:   "sync",
-	Short: "Sync all repositories",
-	Long:  "Update all repositories by pulling latest changes from remotes",
-	Run: func(_ *cobra.Command, _ []string) {
-		fmt.Println("Syncing repositories...")
-		fmt.Println("(Implementation coming soon)")
-	},
-}
-
-func init() {
-	// Branch command flags
-	branchesCmd.Flags().Bool("merged", false, "Show only merged branches")
-	branchesCmd.Flags().Bool("stale", false, "Show only stale branches")
-	branchesCmd.Flags().Int("stale-days", 30, "Days before a branch is considered stale")
-
-	// Repos command flags
-	reposCmd.Flags().Bool("archived", false, "Show only archived repositories")
-	reposCmd.Flags().Bool("backup", true, "Create backup before deletion")
-
-	// Audit command flags
-	auditCmd.Flags().Bool("non-git", false, "Show only non-git directories")
+and out-of-date checkouts.`),
+		kong.UsageOnError(),
+		kong.Vars{"version": fmt.Sprintf("%s (commit: %s, built: %s)", version, commit, date)},
+	)
+	err := ctx.Run(&cli)
+	ctx.FatalIfErrorf(err)
+	// Explicitly exit with 0 on success so tests can verify exit behavior.
+	os.Exit(0)
 }

@@ -32,14 +32,14 @@ func NewTestRepo(t *testing.T, name string) *TestRepo {
 		t:    t,
 	}
 
-	// Initialize git repo
-	repo.run("git", "init")
-	repo.run("git", "config", "user.name", "Test User")
-	repo.run("git", "config", "user.email", "test@example.com")
+	// Initialize git repo with "main" as default branch.
+	repo.run("init", "-b", "main")
+	repo.run("config", "user.name", "Test User")
+	repo.run("config", "user.email", "test@example.com")
 
 	// Create initial commit
 	repo.WriteFile("README.md", "# Test Repository\n")
-	repo.run("git", "add", "README.md")
+	repo.run("add", "README.md")
 	repo.CommitWithDate("Initial commit", time.Now())
 
 	return repo
@@ -57,7 +57,7 @@ func (r *TestRepo) WriteFile(filename, content string) {
 // AddFile stages a file for commit
 func (r *TestRepo) AddFile(filename string) {
 	r.t.Helper()
-	r.run("git", "add", filename)
+	r.run("add", filename)
 }
 
 // Commit creates a commit with the current timestamp
@@ -86,31 +86,31 @@ func (r *TestRepo) CommitWithDate(message string, date time.Time) {
 // CreateBranch creates a new branch
 func (r *TestRepo) CreateBranch(name string) {
 	r.t.Helper()
-	r.run("git", "checkout", "-b", name)
+	r.run("checkout", "-b", name)
 }
 
 // Checkout switches to a branch
 func (r *TestRepo) Checkout(branch string) {
 	r.t.Helper()
-	r.run("git", "checkout", branch)
+	r.run("checkout", branch)
 }
 
 // Merge merges a branch into the current branch
 func (r *TestRepo) Merge(branch string) {
 	r.t.Helper()
-	r.run("git", "merge", "--no-ff", branch, "-m", fmt.Sprintf("Merge branch '%s'", branch))
+	r.run("merge", "--no-ff", branch, "-m", fmt.Sprintf("Merge branch '%s'", branch))
 }
 
 // AddRemote adds a remote to the repository
 func (r *TestRepo) AddRemote(name, url string) {
 	r.t.Helper()
-	r.run("git", "remote", "add", name, url)
+	r.run("remote", "add", name, url)
 }
 
 // Push pushes to a remote
 func (r *TestRepo) Push(remote, branch string) {
 	r.t.Helper()
-	r.run("git", "push", remote, branch)
+	r.run("push", remote, branch)
 }
 
 // CurrentBranch returns the current branch name
@@ -144,7 +144,8 @@ func (r *TestRepo) Branches() []string {
 	return branches
 }
 
-// run executes a git command in the repository
+// run executes a git command in the repository. Pass git subcommand and args
+// directly (e.g., run("init"), run("add", "file.txt")) -- "git" is prepended.
 func (r *TestRepo) run(args ...string) {
 	r.t.Helper()
 	cmd := exec.Command("git", args...)
