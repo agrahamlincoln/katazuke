@@ -12,12 +12,20 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
+// SyncConfig holds configuration for the sync command.
+type SyncConfig struct {
+	Strategy  string `yaml:"strategy"`   // "rebase", "merge", or "ff-only"
+	SkipDirty bool   `yaml:"skip_dirty"` // skip dirty repos without merge-tree check
+	AutoStash bool   `yaml:"auto_stash"` // attempt stash/pop for dirty repos
+}
+
 // Config holds all katazuke configuration.
 type Config struct {
-	ProjectsDir        string   `yaml:"projects_dir"`
-	StaleThresholdDays int      `yaml:"stale_threshold_days"`
-	GithubToken        string   `yaml:"github_token"`
-	ExcludePatterns    []string `yaml:"exclude_patterns"`
+	ProjectsDir        string     `yaml:"projects_dir"`
+	StaleThresholdDays int        `yaml:"stale_threshold_days"`
+	GithubToken        string     `yaml:"github_token"`
+	ExcludePatterns    []string   `yaml:"exclude_patterns"`
+	Sync               SyncConfig `yaml:"sync"`
 }
 
 // Defaults returns a Config with default values.
@@ -27,6 +35,11 @@ func Defaults() Config {
 		ProjectsDir:        filepath.Join(home, "projects"),
 		StaleThresholdDays: 30,
 		ExcludePatterns:    []string{".archive", "vendor"},
+		Sync: SyncConfig{
+			Strategy:  "rebase",
+			SkipDirty: false,
+			AutoStash: true,
+		},
 	}
 }
 
@@ -90,6 +103,19 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("GH_TOKEN"); v != "" && cfg.GithubToken == "" {
 		cfg.GithubToken = v
+	}
+	if v := os.Getenv("KATAZUKE_SYNC_STRATEGY"); v != "" {
+		cfg.Sync.Strategy = v
+	}
+	if v := os.Getenv("KATAZUKE_SYNC_SKIP_DIRTY"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Sync.SkipDirty = b
+		}
+	}
+	if v := os.Getenv("KATAZUKE_SYNC_AUTO_STASH"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Sync.AutoStash = b
+		}
 	}
 }
 

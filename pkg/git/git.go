@@ -146,6 +146,70 @@ func HasRemote(repoPath, remote string) bool {
 	return err == nil
 }
 
+// Pull pulls from the default remote using the given strategy.
+// Valid strategies: "rebase", "merge", "ff-only".
+func Pull(repoPath string, strategy string) error {
+	args := []string{"pull"}
+	switch strategy {
+	case "rebase":
+		args = append(args, "--rebase")
+	case "ff-only":
+		args = append(args, "--ff-only")
+	case "merge", "":
+		// default git pull behavior
+	default:
+		return fmt.Errorf("unknown pull strategy: %q", strategy)
+	}
+	_, err := run(repoPath, args...)
+	return err
+}
+
+// StashPush stashes the current working tree changes with the given message.
+func StashPush(repoPath string, message string) error {
+	_, err := run(repoPath, "stash", "push", "-m", message)
+	return err
+}
+
+// StashPop applies and removes the most recent stash entry.
+func StashPop(repoPath string) error {
+	_, err := run(repoPath, "stash", "pop")
+	return err
+}
+
+// RebaseAbort aborts an in-progress rebase, restoring the branch to its pre-rebase state.
+func RebaseAbort(repoPath string) error {
+	_, err := run(repoPath, "rebase", "--abort")
+	return err
+}
+
+// MergeAbort aborts an in-progress merge, restoring the branch to its pre-merge state.
+func MergeAbort(repoPath string) error {
+	_, err := run(repoPath, "merge", "--abort")
+	return err
+}
+
+// MergeBase returns the best common ancestor commit between two refs.
+func MergeBase(repoPath string, ref1, ref2 string) (string, error) {
+	return run(repoPath, "merge-base", ref1, ref2)
+}
+
+// MergeTree performs a three-way merge-tree between base, local, and remote tree-ish
+// references. It returns the merge output, whether conflicts were detected, and any error.
+// This is a read-only operation that does not modify the working tree.
+func MergeTree(repoPath string, base, local, remote string) (string, bool, error) {
+	cmd := exec.Command("git", "merge-tree", base, local, remote)
+	cmd.Dir = repoPath
+	out, err := cmd.CombinedOutput()
+	output := strings.TrimSpace(string(out))
+	if err != nil {
+		// merge-tree exits non-zero on conflicts in some versions
+		return output, true, nil
+	}
+	// Old-style merge-tree outputs conflict markers when there are conflicts.
+	hasConflicts := strings.Contains(output, "<<<<<<")
+	return output, hasConflicts, nil
+}
+
 // splitNonEmpty splits a newline-separated string and returns non-empty lines.
 func splitNonEmpty(s string) []string {
 	if s == "" {

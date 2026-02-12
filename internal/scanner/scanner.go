@@ -13,8 +13,8 @@ import (
 	"github.com/agrahamlincoln/katazuke/pkg/git"
 )
 
-// indexFile represents the schema of a .katazuke index file.
-type indexFile struct {
+// IndexFile represents the schema of a .katazuke index file.
+type IndexFile struct {
 	Groups  []string `yaml:"groups"`
 	Ignores []string `yaml:"ignores"`
 }
@@ -52,7 +52,7 @@ func scan(dir string, opts Options, visited map[string]bool, repos *[]string) er
 	}
 	visited[resolved] = true
 
-	idx, hasIndex, err := loadIndex(dir)
+	idx, hasIndex, err := LoadIndex(dir)
 	if err != nil {
 		return err
 	}
@@ -63,9 +63,9 @@ func scan(dir string, opts Options, visited map[string]bool, repos *[]string) er
 	return scanFlat(dir, opts, repos)
 }
 
-func scanWithIndex(dir string, idx indexFile, opts Options, visited map[string]bool, repos *[]string) error {
-	ignoreSet := toSet(idx.Ignores)
-	groupSet := toSet(idx.Groups)
+func scanWithIndex(dir string, idx IndexFile, opts Options, visited map[string]bool, repos *[]string) error {
+	ignoreSet := ToSet(idx.Ignores)
+	groupSet := ToSet(idx.Groups)
 
 	// Recurse into group directories.
 	for _, group := range idx.Groups {
@@ -98,7 +98,7 @@ func scanWithIndex(dir string, idx indexFile, opts Options, visited map[string]b
 		if !entry.IsDir() {
 			continue
 		}
-		if groupSet[name] || ignoreSet[name] || isExcluded(name, opts.ExcludePatterns) {
+		if groupSet[name] || ignoreSet[name] || IsExcluded(name, opts.ExcludePatterns) {
 			continue
 		}
 		child := filepath.Join(dir, name)
@@ -122,7 +122,7 @@ func scanFlat(dir string, opts Options, repos *[]string) error {
 		if !entry.IsDir() {
 			continue
 		}
-		if isExcluded(name, opts.ExcludePatterns) {
+		if IsExcluded(name, opts.ExcludePatterns) {
 			continue
 		}
 		child := filepath.Join(dir, name)
@@ -133,42 +133,43 @@ func scanFlat(dir string, opts Options, repos *[]string) error {
 	return nil
 }
 
-// loadIndex loads and validates a .katazuke file from the given directory.
+// LoadIndex loads and validates a .katazuke file from the given directory.
 // Returns the parsed index, whether the file existed, and any error.
-func loadIndex(dir string) (indexFile, bool, error) {
+func LoadIndex(dir string) (IndexFile, bool, error) {
 	path := filepath.Clean(filepath.Join(dir, ".katazuke"))
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return indexFile{}, false, nil
+		return IndexFile{}, false, nil
 	}
 	if err != nil {
-		return indexFile{}, false, fmt.Errorf("reading %s: %w", path, err)
+		return IndexFile{}, false, fmt.Errorf("reading %s: %w", path, err)
 	}
 
 	// Empty file is valid (treated as empty groups/ignores).
 	if len(strings.TrimSpace(string(data))) == 0 {
-		return indexFile{}, true, nil
+		return IndexFile{}, true, nil
 	}
 
 	// Parse and validate strict schema: only "groups" and "ignores" allowed.
 	var raw map[string]any
 	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return indexFile{}, false, fmt.Errorf("parsing %s: %w", path, err)
+		return IndexFile{}, false, fmt.Errorf("parsing %s: %w", path, err)
 	}
 	for key := range raw {
 		if key != "groups" && key != "ignores" {
-			return indexFile{}, false, fmt.Errorf("%s: unknown field %q (only 'groups' and 'ignores' are allowed)", path, key)
+			return IndexFile{}, false, fmt.Errorf("%s: unknown field %q (only 'groups' and 'ignores' are allowed)", path, key)
 		}
 	}
 
-	var idx indexFile
+	var idx IndexFile
 	if err := yaml.Unmarshal(data, &idx); err != nil {
-		return indexFile{}, false, fmt.Errorf("parsing %s: %w", path, err)
+		return IndexFile{}, false, fmt.Errorf("parsing %s: %w", path, err)
 	}
 	return idx, true, nil
 }
 
-func toSet(items []string) map[string]bool {
+// ToSet converts a string slice to a set (map with bool values).
+func ToSet(items []string) map[string]bool {
 	s := make(map[string]bool, len(items))
 	for _, item := range items {
 		s[item] = true
@@ -176,7 +177,8 @@ func toSet(items []string) map[string]bool {
 	return s
 }
 
-func isExcluded(name string, patterns []string) bool {
+// IsExcluded returns true if the given name matches any of the glob patterns.
+func IsExcluded(name string, patterns []string) bool {
 	for _, pattern := range patterns {
 		if matched, _ := filepath.Match(pattern, name); matched {
 			return true

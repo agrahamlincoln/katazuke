@@ -1,0 +1,121 @@
+package main
+
+import (
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+
+	"github.com/fatih/color"
+
+	"github.com/agrahamlincoln/katazuke/internal/config"
+	"github.com/agrahamlincoln/katazuke/internal/scanner"
+	"github.com/agrahamlincoln/katazuke/internal/sync"
+)
+
+// SyncCmd handles repository synchronization.
+type SyncCmd struct {
+	Pattern string `name:"pattern" short:"f" help:"Filter repositories by name pattern (glob)." default:""`
+}
+
+// Run executes the sync command.
+func (c *SyncCmd) Run(globals *CLI) error {
+	if globals.Verbose {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		})))
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	projectsDir := globals.ProjectsDir
+	if projectsDir == "" || projectsDir == "~/projects" {
+		projectsDir = cfg.ProjectsDir
+	} else {
+		projectsDir = expandHome(projectsDir)
+	}
+
+	fmt.Printf("Scanning %s for repositories...\n", projectsDir)
+
+	repoPaths, err := scanner.Scan(projectsDir, scanner.Options{
+		ExcludePatterns: cfg.ExcludePatterns,
+	})
+	if err != nil {
+		return fmt.Errorf("scanning repositories: %w", err)
+	}
+
+	if len(repoPaths) == 0 {
+		fmt.Println("No repositories found.")
+		return nil
+	}
+
+	if c.Pattern != "" {
+		repoPaths = filterByPattern(repoPaths, c.Pattern)
+		if len(repoPaths) == 0 {
+			fmt.Printf("No repositories matching %q found.\n", c.Pattern)
+			return nil
+		}
+	}
+
+	slog.Debug("found repositories", "count", len(repoPaths))
+
+	opts := sync.Options{
+		Strategy:  cfg.Sync.Strategy,
+		SkipDirty: cfg.Sync.SkipDirty,
+		AutoStash: cfg.Sync.AutoStash,
+		DryRun:    globals.DryRun,
+		Verbose:   globals.Verbose,
+	}
+
+	fmt.Printf("Syncing %d repositories...\n\n", len(repoPaths))
+
+	results := sync.All(repoPaths, opts, sync.RealGitOps{})
+
+	printSyncResults(results, globals.DryRun)
+	return nil
+}
+
+func printSyncResults(results []sync.Result, dryRun bool) {
+	green := color.New(color.FgGreen)
+	yellow := color.New(color.FgYellow)
+	red := color.New(color.FgRed)
+	bold := color.New(color.Bold)
+
+	var synced, skipped, failed int
+	for _, r := range results {
+		switch r.Status {
+		case sync.Synced:
+			synced++
+			fmt.Printf("  %s %s\n", green.Sprint("[synced]"), r.RepoName)
+		case sync.Skipped:
+			skipped++
+			fmt.Printf("  %s %s: %s\n", yellow.Sprint("[skipped]"), r.RepoName, r.Message)
+		case sync.Failed:
+			failed++
+			fmt.Printf("  %s %s: %s\n", red.Sprint("[failed]"), r.RepoName, r.Message)
+		}
+	}
+
+	fmt.Println()
+	summary := fmt.Sprintf("Synced %d, skipped %d, failed %d", synced, skipped, failed)
+	if dryRun {
+		summary += " (dry run)"
+	}
+	fmt.Println(bold.Sprint(summary))
+}
+
+// filterByPattern filters repository paths by matching the base name against
+// a glob pattern.
+func filterByPattern(repos []string, pattern string) []string {
+	var filtered []string
+	for _, repoPath := range repos {
+		name := filepath.Base(repoPath)
+		if matched, _ := filepath.Match(pattern, name); matched {
+			filtered = append(filtered, repoPath)
+		}
+	}
+	return filtered
+}

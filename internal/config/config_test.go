@@ -15,6 +15,15 @@ func TestDefaults(t *testing.T) {
 	if cfg.ProjectsDir == "" {
 		t.Error("expected non-empty projects dir")
 	}
+	if cfg.Sync.Strategy != "rebase" {
+		t.Errorf("expected sync strategy rebase, got %q", cfg.Sync.Strategy)
+	}
+	if cfg.Sync.SkipDirty {
+		t.Error("expected sync skip_dirty to be false by default")
+	}
+	if !cfg.Sync.AutoStash {
+		t.Error("expected sync auto_stash to be true by default")
+	}
 }
 
 func TestLoadFileNotFound(t *testing.T) {
@@ -92,6 +101,56 @@ func TestGithubTokenFallback(t *testing.T) {
 	// GITHUB_TOKEN should take precedence over GH_TOKEN when KATAZUKE_ is empty.
 	if cfg.GithubToken != "from_github" {
 		t.Errorf("expected from_github, got %s", cfg.GithubToken)
+	}
+}
+
+func TestSyncConfigFromFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	configDir := filepath.Join(dir, "katazuke")
+	if err := os.MkdirAll(configDir, 0750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(
+		"sync:\n  strategy: ff-only\n  skip_dirty: true\n  auto_stash: false\n",
+	), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Sync.Strategy != "ff-only" {
+		t.Errorf("expected ff-only, got %q", cfg.Sync.Strategy)
+	}
+	if !cfg.Sync.SkipDirty {
+		t.Error("expected skip_dirty to be true")
+	}
+	if cfg.Sync.AutoStash {
+		t.Error("expected auto_stash to be false")
+	}
+}
+
+func TestSyncEnvOverrides(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("KATAZUKE_SYNC_STRATEGY", "merge")
+	t.Setenv("KATAZUKE_SYNC_SKIP_DIRTY", "true")
+	t.Setenv("KATAZUKE_SYNC_AUTO_STASH", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Sync.Strategy != "merge" {
+		t.Errorf("expected merge, got %q", cfg.Sync.Strategy)
+	}
+	if !cfg.Sync.SkipDirty {
+		t.Error("expected skip_dirty to be true")
+	}
+	if cfg.Sync.AutoStash {
+		t.Error("expected auto_stash to be false")
 	}
 }
 

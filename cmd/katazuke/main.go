@@ -225,26 +225,6 @@ func expandHome(path string) string {
 	return path
 }
 
-// AuditCmd handles workspace auditing.
-type AuditCmd struct {
-	NonGit bool `name:"non-git" help:"Show only non-git directories."`
-}
-
-// Run executes the audit command.
-func (c *AuditCmd) Run(globals *CLI) error {
-	slog.Debug("audit", "projects_dir", globals.ProjectsDir, "dry_run", globals.DryRun)
-	return fmt.Errorf("audit command is not yet implemented")
-}
-
-// SyncCmd handles repository synchronization.
-type SyncCmd struct{}
-
-// Run executes the sync command.
-func (c *SyncCmd) Run(globals *CLI) error {
-	slog.Debug("sync", "projects_dir", globals.ProjectsDir, "dry_run", globals.DryRun)
-	return fmt.Errorf("sync command is not yet implemented")
-}
-
 // VersionCmd shows version information.
 type VersionCmd struct{}
 
