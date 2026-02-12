@@ -374,6 +374,117 @@ func run(repoPath string, args ...string) (string, error) {
 	return string(out[:len(out)-1]), nil // trim trailing newline
 }
 
+func TestCommitsAheadBehind(t *testing.T) {
+	repo := helpers.NewTestRepo(t, "ahead-behind")
+
+	// Create a branch with 2 commits ahead of main.
+	repo.CreateBranch("feature/ahead")
+	repo.WriteFile("f1.txt", "first")
+	repo.AddFile("f1.txt")
+	repo.Commit("first feature commit")
+	repo.WriteFile("f2.txt", "second")
+	repo.AddFile("f2.txt")
+	repo.Commit("second feature commit")
+	repo.Checkout("main")
+
+	// Add 1 commit to main so the branch is behind.
+	repo.WriteFile("main.txt", "main work")
+	repo.AddFile("main.txt")
+	repo.Commit("main commit")
+
+	ahead, behind, err := git.CommitsAheadBehind(repo.Path, "feature/ahead", "main")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ahead != 2 {
+		t.Errorf("expected 2 ahead, got %d", ahead)
+	}
+	if behind != 1 {
+		t.Errorf("expected 1 behind, got %d", behind)
+	}
+}
+
+func TestCommitsAheadBehind_NoDivergence(t *testing.T) {
+	repo := helpers.NewTestRepo(t, "no-diverge")
+
+	repo.CreateBranch("feature/same")
+	repo.Checkout("main")
+
+	ahead, behind, err := git.CommitsAheadBehind(repo.Path, "feature/same", "main")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ahead != 0 {
+		t.Errorf("expected 0 ahead, got %d", ahead)
+	}
+	if behind != 0 {
+		t.Errorf("expected 0 behind, got %d", behind)
+	}
+}
+
+func TestHasRemoteBranch(t *testing.T) {
+	clonePath, _ := setupRemotePair(t, "has-remote-branch")
+
+	// "main" should exist on origin.
+	has, err := git.HasRemoteBranch(clonePath, "origin", "main")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !has {
+		t.Error("expected origin/main to exist")
+	}
+
+	// A non-existent branch should not exist.
+	has, err = git.HasRemoteBranch(clonePath, "origin", "nonexistent")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if has {
+		t.Error("expected origin/nonexistent to not exist")
+	}
+}
+
+func TestCreateTag(t *testing.T) {
+	repo := helpers.NewTestRepo(t, "create-tag")
+
+	repo.CreateBranch("feature/to-archive")
+	repo.WriteFile("archive.txt", "archive me")
+	repo.AddFile("archive.txt")
+	repo.Commit("archive commit")
+	repo.Checkout("main")
+
+	err := git.CreateTag(repo.Path, "archive/feature/to-archive", "feature/to-archive")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the tag exists.
+	out, err := run(repo.Path, "tag", "-l", "archive/feature/to-archive")
+	if err != nil {
+		t.Fatalf("unexpected error listing tags: %v", err)
+	}
+	if out != "archive/feature/to-archive" {
+		t.Errorf("expected tag archive/feature/to-archive, got %q", out)
+	}
+}
+
+func TestCommitSubject(t *testing.T) {
+	repo := helpers.NewTestRepo(t, "commit-subject")
+
+	repo.CreateBranch("feature/subject")
+	repo.WriteFile("subject.txt", "test")
+	repo.AddFile("subject.txt")
+	repo.Commit("This is the subject line")
+
+	subject, err := git.CommitSubject(repo.Path, "feature/subject")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if subject != "This is the subject line" {
+		t.Errorf("expected %q, got %q", "This is the subject line", subject)
+	}
+}
+
 func TestMergeTree(t *testing.T) {
 	t.Run("no_conflict", func(t *testing.T) {
 		repo := helpers.NewTestRepo(t, "merge-tree-clean")

@@ -18,6 +18,7 @@ type MergedBranch struct {
 	RepoName   string
 	Branch     string
 	LastCommit time.Time
+	HasRemote  bool
 }
 
 // FindMerged scans the given repositories and returns branches that have been
@@ -70,11 +71,18 @@ func findMergedInRepo(repoPath string) []MergedBranch {
 				"repo", repoName, "branch", branch, "error", err)
 		}
 
+		hasRemote, err := git.HasRemoteBranch(repoPath, "origin", branch)
+		if err != nil {
+			slog.Debug("could not check remote branch",
+				"repo", repoName, "branch", branch, "error", err)
+		}
+
 		results = append(results, MergedBranch{
 			RepoPath:   repoPath,
 			RepoName:   repoName,
 			Branch:     branch,
 			LastCommit: commitDate,
+			HasRemote:  hasRemote,
 		})
 	}
 
@@ -82,6 +90,11 @@ func findMergedInRepo(repoPath string) []MergedBranch {
 }
 
 // Label returns a display string for the merged branch in the form "repo: branch".
+// Branches with a remote counterpart are annotated with "(+ remote)".
 func (m MergedBranch) Label() string {
-	return fmt.Sprintf("%s: %s", m.RepoName, m.Branch)
+	label := fmt.Sprintf("%s: %s", m.RepoName, m.Branch)
+	if m.HasRemote {
+		label += " (+ remote)"
+	}
+	return label
 }

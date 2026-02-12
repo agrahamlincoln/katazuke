@@ -1,6 +1,9 @@
 package branches_test
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -172,5 +175,137 @@ func TestMergedBranch_Label(t *testing.T) {
 	want := "my-repo: feature/test"
 	if got := mb.Label(); got != want {
 		t.Errorf("Label() = %q, want %q", got, want)
+	}
+}
+
+func TestMergedBranch_LabelWithRemote(t *testing.T) {
+	mb := branches.MergedBranch{
+		RepoName:  "my-repo",
+		Branch:    "feature/test",
+		HasRemote: true,
+	}
+	want := "my-repo: feature/test (+ remote)"
+	if got := mb.Label(); got != want {
+		t.Errorf("Label() = %q, want %q", got, want)
+	}
+}
+
+func TestFindMerged_HasRemoteField(t *testing.T) {
+	// Create a bare remote and a clone with a proper origin.
+	origin := helpers.NewTestRepo(t, "remote-merged-origin")
+
+	tmpDir := t.TempDir()
+	barePath := filepath.Join(tmpDir, "remote-merged-bare.git")
+
+	// #nosec G204 - git command with controlled inputs in test code
+	cmd := exec.Command("git", "clone", "--bare", origin.Path, barePath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("failed to create bare clone: %v\n%s", err, out)
+	}
+
+	clonePath := filepath.Join(tmpDir, "remote-merged-clone")
+	// #nosec G204 - git command with controlled inputs in test code
+	cmd = exec.Command("git", "clone", barePath, clonePath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("failed to clone bare repo: %v\n%s", err, out)
+	}
+
+	// Set git identity in the clone.
+	for _, kv := range [][2]string{{"user.name", "Test User"}, {"user.email", "test@example.com"}} {
+		// #nosec G204 - git command with controlled inputs in test code
+		cmd = exec.Command("git", "config", kv[0], kv[1])
+		cmd.Dir = clonePath
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("failed to set git config: %v\n%s", err, out)
+		}
+	}
+
+	// Create a branch, push it to origin, then merge it locally.
+	gitRun(t, clonePath, "checkout", "-b", "feature/pushed")
+	writeFile(t, clonePath, "pushed.txt", "pushed content")
+	gitRun(t, clonePath, "add", "pushed.txt")
+	gitRun(t, clonePath, "commit", "-m", "pushed commit")
+	gitRun(t, clonePath, "push", "origin", "feature/pushed")
+	gitRun(t, clonePath, "checkout", "main")
+	gitRun(t, clonePath, "merge", "--no-ff", "feature/pushed", "-m", "Merge feature/pushed")
+
+	// Create another branch, merge it, but do NOT push to origin.
+	gitRun(t, clonePath, "checkout", "-b", "feature/local-only")
+	writeFile(t, clonePath, "local.txt", "local content")
+	gitRun(t, clonePath, "add", "local.txt")
+	gitRun(t, clonePath, "commit", "-m", "local commit")
+	gitRun(t, clonePath, "checkout", "main")
+	gitRun(t, clonePath, "merge", "--no-ff", "feature/local-only", "-m", "Merge feature/local-only")
+
+	results, err := branches.FindMerged([]string{clonePath}, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 merged branches, got %d", len(results))
+	}
+
+	byBranch := make(map[string]branches.MergedBranch)
+	for _, r := range results {
+		byBranch[r.Branch] = r
+	}
+
+	pushed, ok := byBranch["feature/pushed"]
+	if !ok {
+		t.Fatal("expected feature/pushed in results")
+	}
+	if !pushed.HasRemote {
+		t.Error("expected feature/pushed to have HasRemote=true")
+	}
+
+	localOnly, ok := byBranch["feature/local-only"]
+	if !ok {
+		t.Fatal("expected feature/local-only in results")
+	}
+	if localOnly.HasRemote {
+		t.Error("expected feature/local-only to have HasRemote=false")
+	}
+}
+
+func TestFindMerged_HasRemoteFalseWithoutOrigin(t *testing.T) {
+	// A repo with no remotes should always have HasRemote=false.
+	repo := helpers.NewTestRepo(t, "no-remote")
+
+	repo.CreateBranch("feature/done")
+	repo.WriteFile("done.txt", "done")
+	repo.AddFile("done.txt")
+	repo.Commit("done commit")
+	repo.Checkout("main")
+	repo.Merge("feature/done")
+
+	results, err := branches.FindMerged([]string{repo.Path}, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].HasRemote {
+		t.Error("expected HasRemote=false for repo without origin")
+	}
+}
+
+// gitRun is a test helper that runs a git command in the given directory.
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	// #nosec G204 - git command with controlled inputs in test code
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
+	}
+}
+
+// writeFile is a test helper that writes content to a file in the given directory.
+func writeFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write %s: %v", name, err)
 	}
 }

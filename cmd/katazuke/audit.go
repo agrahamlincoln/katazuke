@@ -5,12 +5,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/fatih/color"
 
 	"github.com/agrahamlincoln/katazuke/internal/audit"
 	"github.com/agrahamlincoln/katazuke/internal/config"
+	"github.com/agrahamlincoln/katazuke/internal/metrics"
 )
 
 // AuditCmd handles workspace auditing.
@@ -36,6 +38,18 @@ func (c *AuditCmd) runNonGit(globals *CLI) error {
 		})))
 	}
 
+	ml := metrics.NewOrNil()
+	defer func() { _ = ml.Close() }()
+
+	var flags []string
+	if globals.DryRun {
+		flags = append(flags, "--dry-run")
+	}
+	if globals.Verbose {
+		flags = append(flags, "--verbose")
+	}
+	_ = ml.LogCommand("audit --non-git", flags)
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -48,12 +62,14 @@ func (c *AuditCmd) runNonGit(globals *CLI) error {
 
 	fmt.Printf("Scanning %s for non-repository directories...\n", projectsDir)
 
+	scanStart := time.Now()
 	dirs, err := audit.FindNonRepoDirs(projectsDir, audit.Options{
 		ExcludePatterns: cfg.ExcludePatterns,
 	}, cfg.Sync.Workers)
 	if err != nil {
 		return fmt.Errorf("scanning for non-repo directories: %w", err)
 	}
+	_ = ml.LogPerf(0, int(time.Since(scanStart).Milliseconds()))
 
 	if len(dirs) == 0 {
 		fmt.Println("No non-repository directories found.")
@@ -79,7 +95,7 @@ func (c *AuditCmd) runNonGit(globals *CLI) error {
 		return nil
 	}
 
-	return promptNonGitActions(dirs)
+	return promptNonGitActions(dirs, ml)
 }
 
 const (
@@ -88,7 +104,7 @@ const (
 	actionMove   = "move"
 )
 
-func promptNonGitActions(dirs []audit.NonRepoDir) error {
+func promptNonGitActions(dirs []audit.NonRepoDir, ml *metrics.Logger) error {
 	bold := color.New(color.Bold)
 	green := color.New(color.FgGreen)
 	red := color.New(color.FgRed)
@@ -127,6 +143,10 @@ func promptNonGitActions(dirs []audit.NonRepoDir) error {
 		}
 
 		actions = append(actions, dirAction{dir: d, action: action})
+
+		accepted := action == actionRemove || action == actionMove
+		fp := metrics.Fingerprint(d.Path)
+		_ = ml.LogSuggestion("remove_non_git_dir", fp, accepted, 0)
 	}
 
 	// Execute actions.
