@@ -31,13 +31,13 @@ This tool is **intentionally tailored** to a specific workflow (see README.md "W
 - **Location**: `agrahamlincoln/katazuke`
 - **Contents**: Go code, tests, justfile, documentation
 
-### Packaging Repositories (TODO: Not yet created)
+### Packaging Repositories
 - **Homebrew**: `agrahamlincoln/homebrew-katazuke` (follows Homebrew tap convention)
 - **AUR**: `agrahamlincoln/aur-katazuke` (personal package, not on official AUR)
 
 **Why separate?**: Clean separation of concerns, follows ecosystem conventions, avoids chicken-and-egg checksum problems, keeps packaging history out of main repo.
 
-**Current state**: Packaging files still in `homebrew/` and `aur/` directories with TODO comments. Will be moved to separate repos.
+**Local clones**: Expected at `~/projects/homebrew-katazuke` and `~/projects/aur-katazuke` (sibling directories). The release process requires these.
 
 ## Platform Support
 
@@ -70,11 +70,11 @@ This tool is **intentionally tailored** to a specific workflow (see README.md "W
 **Fully automated** via `just release VERSION`:
 1. Builds for both platforms
 2. Creates tarballs, calculates SHA256s
-3. Updates Homebrew formula in `../homebrew-katazuke` (TODO: once repo exists)
+3. Updates Homebrew formula in `../homebrew-katazuke`
 4. Commits, tags, pushes main repo
 5. Creates GitHub release
 6. Downloads source tarball, calculates SHA256
-7. Updates PKGBUILD in `../aur-katazuke` (TODO: once repo exists)
+7. Updates PKGBUILD in `../aur-katazuke`
 8. Commits and pushes both packaging repos
 
 **Dependencies**: `gh` CLI for creating releases
@@ -130,8 +130,6 @@ katazuke/
 ├── test/
 │   ├── e2e/              # E2E tests (build tag: e2e)
 │   └── helpers/          # Test utilities (git repo creation, etc.)
-├── homebrew/             # TODO: Move to agrahamlincoln/homebrew-katazuke
-├── aur/                  # TODO: Move to agrahamlincoln/aur-katazuke
 ├── justfile              # Build automation (replaces Makefile)
 ├── PRD.md               # Product requirements (comprehensive design doc)
 ├── README.md            # User-facing documentation
@@ -193,14 +191,12 @@ The tool should be **defensive** and detect when actual workflow differs from ex
 - ✅ Testing infrastructure (unit + e2e framework)
 - ✅ Justfile with full automation
 - ✅ Linting configuration
-- ✅ Packaging files (pending move to separate repos)
+- ✅ Packaging repos created and populated (`homebrew-katazuke`, `aur-katazuke`)
+- ✅ Release automation updated to work with sibling packaging repos
 - ⏳ No core features implemented yet
 
 **Next steps**:
-1. Create `homebrew-katazuke` and `aur-katazuke` repositories
-2. Move packaging files to those repos
-3. Update release automation to work with separate repos
-4. Begin implementing Phase 1 features (branch cleanup, archived repo detection)
+1. Begin implementing Phase 1 features (branch cleanup, archived repo detection)
 
 ## Questions to Ask
 

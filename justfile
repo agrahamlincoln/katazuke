@@ -134,25 +134,8 @@ build-all:
     GOOS=linux GOARCH=amd64 go build -ldflags "{{ldflags}}" -o dist/{{binary_name}}-linux-amd64 ./cmd/katazuke
     @echo "Built all platform binaries in dist/"
 
-# Build Homebrew package (for local testing)
-package-homebrew: build-all
-    @echo "Building Homebrew package..."
-    @echo "Binaries built in dist/"
-    @echo "Update homebrew/katazuke.rb with new version and SHA256"
-
-# Build AUR package (for local testing)
-package-aur:
-    @echo "Building AUR package..."
-    cd aur && makepkg -f
-    @echo "Built AUR package"
-    @echo "Install with: cd aur && makepkg -si"
-
-# Install AUR package locally
-install-aur: package-aur
-    @echo "Installing AUR package..."
-    cd aur && makepkg -si
-
 # Create a new release (fully automated)
+# Requires: gh CLI, sibling repos ../homebrew-katazuke and ../aur-katazuke
 release VERSION:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -160,76 +143,118 @@ release VERSION:
     echo "Creating release v{{VERSION}}..."
     echo ""
 
-    # 1. Build release artifacts
+    # Portable SHA256: sha256sum (Linux) or shasum (macOS)
+    sha256() {
+        if command -v sha256sum &> /dev/null; then
+            sha256sum "$1" | cut -d' ' -f1
+        else
+            shasum -a 256 "$1" | cut -d' ' -f1
+        fi
+    }
+
+    # Validate prerequisites
+    if ! command -v gh &> /dev/null; then
+        echo "ERROR: gh CLI not found. Install with: brew install gh"
+        exit 1
+    fi
+
+    homebrew_repo="$(cd .. && pwd)/homebrew-katazuke"
+    aur_repo="$(cd .. && pwd)/aur-katazuke"
+
+    if [ ! -d "$homebrew_repo/.git" ]; then
+        echo "ERROR: Homebrew repo not found at $homebrew_repo"
+        echo "Clone it: gh repo clone agrahamlincoln/homebrew-katazuke $homebrew_repo"
+        exit 1
+    fi
+    if [ ! -d "$aur_repo/.git" ]; then
+        echo "ERROR: AUR repo not found at $aur_repo"
+        echo "Clone it: gh repo clone agrahamlincoln/aur-katazuke $aur_repo"
+        exit 1
+    fi
+
+    # 1. Build release artifacts with explicit version
     echo "1. Building release artifacts..."
-    just build-all
+    mkdir -p dist
+    release_ldflags="-X main.version={{VERSION}} -X main.commit=$(git rev-parse --short HEAD) -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    GOOS=darwin GOARCH=arm64 go build -ldflags "$release_ldflags" -o dist/{{binary_name}}-darwin-arm64 ./cmd/katazuke
+    GOOS=linux GOARCH=amd64 go build -ldflags "$release_ldflags" -o dist/{{binary_name}}-linux-amd64 ./cmd/katazuke
 
     # 2. Create tarballs
     echo "2. Creating release tarballs..."
     mkdir -p dist/release
-    cd dist && tar -czf release/{{binary_name}}-{{VERSION}}-darwin-arm64.tar.gz {{binary_name}}-darwin-arm64
-    cd dist && tar -czf release/{{binary_name}}-{{VERSION}}-linux-amd64.tar.gz {{binary_name}}-linux-amd64
+    tar -czf dist/release/{{binary_name}}-{{VERSION}}-darwin-arm64.tar.gz -C dist {{binary_name}}-darwin-arm64
+    tar -czf dist/release/{{binary_name}}-{{VERSION}}-linux-amd64.tar.gz -C dist {{binary_name}}-linux-amd64
 
-    # 3. Calculate SHA256 checksums
+    # 3. Calculate SHA256 checksums for binary tarballs
     echo "3. Calculating SHA256 checksums..."
-    darwin_sha=$(shasum -a 256 dist/release/{{binary_name}}-{{VERSION}}-darwin-arm64.tar.gz | cut -d' ' -f1)
-    linux_sha=$(shasum -a 256 dist/release/{{binary_name}}-{{VERSION}}-linux-amd64.tar.gz | cut -d' ' -f1)
+    darwin_sha=$(sha256 dist/release/{{binary_name}}-{{VERSION}}-darwin-arm64.tar.gz)
+    linux_sha=$(sha256 dist/release/{{binary_name}}-{{VERSION}}-linux-amd64.tar.gz)
     echo "  darwin-arm64: $darwin_sha"
     echo "  linux-amd64:  $linux_sha"
 
-    # 4. Update Homebrew formula
+    # 4. Update Homebrew formula in sibling repo
     echo "4. Updating Homebrew formula..."
-    sed -i '' "s/version \".*\"/version \"{{VERSION}}\"/" homebrew/katazuke.rb
-    sed -i '' "s|katazuke/releases/download/v[^/]*/|katazuke/releases/download/v{{VERSION}}/|g" homebrew/katazuke.rb
-    sed -i '' "s/katazuke-[0-9.]*-darwin-arm64/katazuke-{{VERSION}}-darwin-arm64/g" homebrew/katazuke.rb
-    sed -i '' "s/katazuke-[0-9.]*-linux-amd64/katazuke-{{VERSION}}-linux-amd64/g" homebrew/katazuke.rb
-    # Update SHA256s
-    sed -i '' "/darwin-arm64.tar.gz/,/sha256/ s/sha256 \".*\"/sha256 \"$darwin_sha\"/" homebrew/katazuke.rb
-    sed -i '' "/linux-amd64.tar.gz/,/sha256/ s/sha256 \".*\"/sha256 \"$linux_sha\"/" homebrew/katazuke.rb
+    formula="$homebrew_repo/katazuke.rb"
+    sed -i.bak "s/version \".*\"/version \"{{VERSION}}\"/" "$formula" && rm "$formula.bak"
+    sed -i.bak "s|katazuke/releases/download/v[^/]*/|katazuke/releases/download/v{{VERSION}}/|g" "$formula" && rm "$formula.bak"
+    sed -i.bak "s/katazuke-[0-9.]*-darwin-arm64/katazuke-{{VERSION}}-darwin-arm64/g" "$formula" && rm "$formula.bak"
+    sed -i.bak "s/katazuke-[0-9.]*-linux-amd64/katazuke-{{VERSION}}-linux-amd64/g" "$formula" && rm "$formula.bak"
+    sed -i.bak "/darwin-arm64.tar.gz/,/sha256/ s/sha256 \".*\"/sha256 \"$darwin_sha\"/" "$formula" && rm "$formula.bak"
+    sed -i.bak "/linux-amd64.tar.gz/,/sha256/ s/sha256 \".*\"/sha256 \"$linux_sha\"/" "$formula" && rm "$formula.bak"
 
-    # 5. Update AUR PKGBUILD
-    echo "5. Updating AUR PKGBUILD..."
-    sed -i '' "s/^pkgver=.*/pkgver={{VERSION}}/" aur/PKGBUILD
-
-    # 6. Copy PKGBUILD to release dir
-    echo "6. Copying PKGBUILD..."
-    cp aur/PKGBUILD dist/release/PKGBUILD
-
-    # 7. Commit formula updates
-    echo "7. Committing formula updates..."
-    git add homebrew/katazuke.rb aur/PKGBUILD
-    git commit -m "chore: release v{{VERSION}}"
-
-    # 8. Create git tag
-    echo "8. Creating git tag..."
+    # 5. Commit and tag main repo
+    echo "5. Committing release..."
+    git commit --allow-empty -m "chore: release v{{VERSION}}"
     git tag -a "v{{VERSION}}" -m "Release v{{VERSION}}"
 
-    # 9. Push commits and tag
-    echo "9. Pushing to origin..."
+    # 6. Push main repo
+    echo "6. Pushing to origin..."
     git push origin main
     git push origin "v{{VERSION}}"
 
-    # 10. Create GitHub release and upload assets
-    echo "10. Creating GitHub release..."
-    if ! command -v gh &> /dev/null; then
-        echo "ERROR: gh CLI not found. Install with: brew install gh"
-        echo "Skipping GitHub release creation."
-        echo "Manually create release and upload files from dist/release/"
-        exit 1
-    fi
-
+    # 7. Create GitHub release with binary tarballs
+    echo "7. Creating GitHub release..."
     gh release create "v{{VERSION}}" \
         --title "v{{VERSION}}" \
         --generate-notes \
         dist/release/{{binary_name}}-{{VERSION}}-darwin-arm64.tar.gz \
-        dist/release/{{binary_name}}-{{VERSION}}-linux-amd64.tar.gz \
-        dist/release/PKGBUILD
+        dist/release/{{binary_name}}-{{VERSION}}-linux-amd64.tar.gz
+
+    # 8. Download source tarball and calculate SHA256 for AUR
+    echo "8. Downloading source tarball for AUR checksum..."
+    gh release download "v{{VERSION}}" \
+        --repo agrahamlincoln/katazuke \
+        --archive tar.gz \
+        --output dist/release/source.tar.gz
+    source_sha=$(sha256 dist/release/source.tar.gz)
+    echo "  source: $source_sha"
+
+    # 9. Update AUR PKGBUILD in sibling repo
+    echo "9. Updating AUR PKGBUILD..."
+    pkgbuild="$aur_repo/PKGBUILD"
+    sed -i.bak "s/^pkgver=.*/pkgver={{VERSION}}/" "$pkgbuild" && rm "$pkgbuild.bak"
+    sed -i.bak "s/^sha256sums=.*/sha256sums=('$source_sha')/" "$pkgbuild" && rm "$pkgbuild.bak"
+
+    # 10. Commit and push homebrew-katazuke
+    echo "10. Pushing homebrew-katazuke..."
+    cd "$homebrew_repo"
+    git add katazuke.rb
+    git commit -m "chore: update to v{{VERSION}}"
+    git push origin main
+
+    # 11. Commit and push aur-katazuke
+    echo "11. Pushing aur-katazuke..."
+    cd "$aur_repo"
+    git add PKGBUILD
+    git commit -m "chore: update to v{{VERSION}}"
+    git push origin main
 
     echo ""
     echo "Release v{{VERSION}} complete!"
-    echo "  - Homebrew formula updated with SHA256s"
-    echo "  - PKGBUILD version updated"
-    echo "  - GitHub release created with assets"
+    echo "  - GitHub release created with binary tarballs"
+    echo "  - Homebrew formula updated with binary SHA256s"
+    echo "  - PKGBUILD updated with source SHA256"
+    echo "  - Both packaging repos pushed"
     echo ""
 
 # Run the binary (build first if needed)
