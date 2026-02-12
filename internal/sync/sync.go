@@ -20,6 +20,8 @@ const (
 	Skipped
 	// Failed indicates an error occurred while syncing.
 	Failed
+	// Switched indicates the repo was on a merged branch and switched to default.
+	Switched
 )
 
 // Result represents the outcome of syncing a single repository.
@@ -32,11 +34,12 @@ type Result struct {
 
 // Options controls sync behavior.
 type Options struct {
-	Strategy  string // "rebase", "merge", "ff-only"
-	SkipDirty bool
-	AutoStash bool
-	DryRun    bool
-	Verbose   bool
+	Strategy           string // "rebase", "merge", "ff-only"
+	SkipDirty          bool
+	AutoStash          bool
+	DryRun             bool
+	Verbose            bool
+	SwitchMergedBranch bool
 }
 
 // GitOps defines the git operations needed by the sync logic.
@@ -48,6 +51,8 @@ type GitOps interface {
 	DefaultBranch(repoPath string) (string, error)
 	HasRemote(repoPath, remote string) bool
 	Pull(repoPath string, strategy string) error
+	IsMerged(repoPath, branch, base string) (bool, error)
+	Checkout(repoPath, branch string) error
 	MergeBase(repoPath string, ref1, ref2 string) (string, error)
 	MergeTree(repoPath string, base, local, remote string) (string, bool, error)
 	StashPush(repoPath string, message string) error
@@ -113,9 +118,7 @@ func syncOne(repoPath string, opts Options, git GitOps) Result {
 	}
 
 	if currentBranch != defaultBranch {
-		result.Status = Skipped
-		result.Message = fmt.Sprintf("on branch %q, not default branch %q", currentBranch, defaultBranch)
-		return result
+		return syncNonDefault(repoPath, repoName, currentBranch, defaultBranch, opts, git)
 	}
 
 	// Check working tree status.
@@ -130,6 +133,73 @@ func syncOne(repoPath string, opts Options, git GitOps) Result {
 		return syncClean(repoPath, repoName, opts, git)
 	}
 	return syncDirty(repoPath, repoName, defaultBranch, opts, git)
+}
+
+func syncNonDefault(repoPath, repoName, currentBranch, defaultBranch string, opts Options, git GitOps) Result {
+	result := Result{
+		RepoPath: repoPath,
+		RepoName: repoName,
+	}
+
+	// Check if the current branch is merged into origin/<default>.
+	remoteDefault := "origin/" + defaultBranch
+	merged, err := git.IsMerged(repoPath, currentBranch, remoteDefault)
+	if err != nil {
+		// If we can't determine merge status, fall back to the original skip behavior.
+		slog.Debug("could not check merge status", "repo", repoName, "error", err)
+		result.Status = Skipped
+		result.Message = fmt.Sprintf("on branch %q, not default branch %q", currentBranch, defaultBranch)
+		return result
+	}
+
+	if !merged {
+		result.Status = Skipped
+		result.Message = fmt.Sprintf("on branch %q, not default branch %q", currentBranch, defaultBranch)
+		return result
+	}
+
+	if !opts.SwitchMergedBranch {
+		result.Status = Skipped
+		result.Message = fmt.Sprintf("on branch %q (merged into %s, safe to switch)", currentBranch, defaultBranch)
+		return result
+	}
+
+	// Only switch if working tree is clean.
+	clean, err := git.IsClean(repoPath)
+	if err != nil {
+		result.Status = Failed
+		result.Message = fmt.Sprintf("could not check working tree: %v", err)
+		return result
+	}
+
+	if !clean {
+		result.Status = Skipped
+		result.Message = fmt.Sprintf("on branch %q (merged, but working tree is dirty)", currentBranch)
+		return result
+	}
+
+	if opts.DryRun {
+		result.Status = Skipped
+		result.Message = fmt.Sprintf("would switch from merged branch %q to %s (dry run)", currentBranch, defaultBranch)
+		return result
+	}
+
+	slog.Debug("switching from merged branch", "repo", repoName, "from", currentBranch, "to", defaultBranch)
+	if err := git.Checkout(repoPath, defaultBranch); err != nil {
+		result.Status = Failed
+		result.Message = fmt.Sprintf("could not switch to %s: %v", defaultBranch, err)
+		return result
+	}
+
+	// Now continue with normal sync (clean working tree on default branch).
+	pullResult := syncClean(repoPath, repoName, opts, git)
+	if pullResult.Status == Failed {
+		return pullResult
+	}
+
+	result.Status = Switched
+	result.Message = fmt.Sprintf("switched from merged branch %q to %s and synced", currentBranch, defaultBranch)
+	return result
 }
 
 func syncClean(repoPath, repoName string, opts Options, git GitOps) Result {

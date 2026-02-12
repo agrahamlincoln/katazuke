@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -33,9 +32,7 @@ func (c *AuditCmd) Run(globals *CLI) error {
 
 func (c *AuditCmd) runNonGit(globals *CLI) error {
 	if globals.Verbose {
-		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-			Level: slog.LevelDebug,
-		})))
+		enableVerboseLogging()
 	}
 
 	ml := metrics.NewOrNil()
@@ -56,8 +53,10 @@ func (c *AuditCmd) runNonGit(globals *CLI) error {
 	}
 
 	projectsDir := globals.ProjectsDir
-	if projectsDir == "~/projects" {
+	if projectsDir == "" || projectsDir == "~/projects" {
 		projectsDir = cfg.ProjectsDir
+	} else {
+		projectsDir = expandHome(projectsDir)
 	}
 
 	fmt.Printf("Scanning %s for non-repository directories...\n", projectsDir)

@@ -2,6 +2,7 @@ package sync
 
 import (
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -21,6 +22,9 @@ type mockGitOps struct {
 	defaultBrErr   error
 	hasRemote      bool
 	pullErr        error
+	isMerged       bool
+	isMergedErr    error
+	checkoutErr    error
 	mergeBase      string
 	mergeBaseErr   error
 	mergeTreeOut   string
@@ -34,6 +38,8 @@ type mockGitOps struct {
 	// Track calls for verification.
 	fetchCalls       []string
 	pullCalls        []string
+	isMergedCalls    []string
+	checkoutCalls    []string
 	stashPushCalls   []string
 	stashPopCalls    int
 	rebaseAbortCalls int
@@ -76,6 +82,20 @@ func (m *mockGitOps) Pull(_ string, strategy string) error {
 	defer m.mu.Unlock()
 	m.pullCalls = append(m.pullCalls, strategy)
 	return m.pullErr
+}
+
+func (m *mockGitOps) IsMerged(_ string, branch, base string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.isMergedCalls = append(m.isMergedCalls, branch+":"+base)
+	return m.isMerged, m.isMergedErr
+}
+
+func (m *mockGitOps) Checkout(_ string, branch string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.checkoutCalls = append(m.checkoutCalls, branch)
+	return m.checkoutErr
 }
 
 func (m *mockGitOps) MergeBase(_ string, _, _ string) (string, error) {
@@ -456,5 +476,131 @@ func TestAll_ResultCallback(t *testing.T) {
 
 	if len(callbackResults) != 2 {
 		t.Fatalf("expected 2 callback results, got %d", len(callbackResults))
+	}
+}
+
+func TestAll_MergedBranchAutoSwitch(t *testing.T) {
+	mock := defaultMock()
+	mock.currentBranch = "feature/done"
+	mock.isMerged = true
+	opts := Options{Strategy: "rebase", SwitchMergedBranch: true}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Switched {
+		t.Errorf("expected Switched, got %d: %s", r.Status, r.Message)
+	}
+	if len(mock.checkoutCalls) != 1 || mock.checkoutCalls[0] != "main" {
+		t.Errorf("expected checkout to main, got %v", mock.checkoutCalls)
+	}
+	if len(mock.pullCalls) != 1 {
+		t.Errorf("expected 1 pull call after switch, got %d", len(mock.pullCalls))
+	}
+}
+
+func TestAll_MergedBranchAutoSwitchDisabled(t *testing.T) {
+	mock := defaultMock()
+	mock.currentBranch = "feature/done"
+	mock.isMerged = true
+	opts := Options{Strategy: "rebase", SwitchMergedBranch: false}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Skipped {
+		t.Errorf("expected Skipped, got %d: %s", r.Status, r.Message)
+	}
+	if len(mock.checkoutCalls) != 0 {
+		t.Error("should not checkout when auto-switch disabled")
+	}
+	// Message should indicate branch is merged and safe to switch.
+	if !strings.Contains(r.Message, "merged") || !strings.Contains(r.Message, "safe to switch") {
+		t.Errorf("expected message about merged branch safe to switch, got %q", r.Message)
+	}
+}
+
+func TestAll_MergedBranchDirtyWorkingTree(t *testing.T) {
+	mock := defaultMock()
+	mock.currentBranch = "feature/done"
+	mock.isMerged = true
+	mock.isClean = false
+	opts := Options{Strategy: "rebase", SwitchMergedBranch: true}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Skipped {
+		t.Errorf("expected Skipped, got %d: %s", r.Status, r.Message)
+	}
+	if len(mock.checkoutCalls) != 0 {
+		t.Error("should not checkout when working tree is dirty")
+	}
+}
+
+func TestAll_NotOnDefaultBranchNotMerged(t *testing.T) {
+	mock := defaultMock()
+	mock.currentBranch = "feature/wip"
+	mock.isMerged = false
+	opts := Options{Strategy: "rebase", SwitchMergedBranch: true}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Skipped {
+		t.Errorf("expected Skipped, got %d: %s", r.Status, r.Message)
+	}
+	if len(mock.checkoutCalls) != 0 {
+		t.Error("should not checkout when branch is not merged")
+	}
+}
+
+func TestAll_MergedBranchDryRun(t *testing.T) {
+	mock := defaultMock()
+	mock.currentBranch = "feature/done"
+	mock.isMerged = true
+	opts := Options{Strategy: "rebase", SwitchMergedBranch: true, DryRun: true}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Skipped {
+		t.Errorf("expected Skipped for dry run, got %d: %s", r.Status, r.Message)
+	}
+	if len(mock.checkoutCalls) != 0 {
+		t.Error("should not checkout during dry run")
+	}
+}
+
+func TestAll_MergedBranchCheckoutFails(t *testing.T) {
+	mock := defaultMock()
+	mock.currentBranch = "feature/done"
+	mock.isMerged = true
+	mock.checkoutErr = fmt.Errorf("checkout failed")
+	opts := Options{Strategy: "rebase", SwitchMergedBranch: true}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Failed {
+		t.Errorf("expected Failed, got %d: %s", r.Status, r.Message)
+	}
+}
+
+func TestAll_MergedBranchSwitchThenPullFails(t *testing.T) {
+	mock := defaultMock()
+	mock.currentBranch = "feature/done"
+	mock.isMerged = true
+	mock.pullErr = fmt.Errorf("pull failed")
+	opts := Options{Strategy: "rebase", SwitchMergedBranch: true}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Failed {
+		t.Errorf("expected Failed when pull fails after switch, got %d: %s", r.Status, r.Message)
+	}
+	if len(mock.checkoutCalls) != 1 {
+		t.Errorf("expected 1 checkout call, got %d", len(mock.checkoutCalls))
 	}
 }

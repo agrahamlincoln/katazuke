@@ -75,6 +75,58 @@ func (c *Client) IsArchived(owner, repo string) (bool, error) {
 	return resp.Archived, nil
 }
 
+// PRState represents the state of a GitHub pull request for a branch.
+type PRState string
+
+const (
+	// PRStateNone means no PR was found for the branch.
+	PRStateNone PRState = "none"
+	// PRStateOpen means a PR is currently open.
+	PRStateOpen PRState = "open"
+	// PRStateMerged means the PR was merged.
+	PRStateMerged PRState = "merged"
+	// PRStateClosed means the PR was closed without merging.
+	PRStateClosed PRState = "closed"
+)
+
+// prSearchResponse holds the response from the GitHub pulls API.
+type prSearchResponse struct {
+	State    string `json:"state"`
+	MergedAt string `json:"merged_at"`
+}
+
+// BranchPRState returns the PR state for a branch. It checks the most recent
+// PR associated with the given head branch. Returns PRStateNone if no PR
+// exists for the branch.
+func (c *Client) BranchPRState(owner, repo, branch string) (PRState, error) {
+	if c.rest == nil {
+		return PRStateNone, fmt.Errorf("no GitHub API client available")
+	}
+
+	var prs []prSearchResponse
+	err := c.rest.Get(
+		fmt.Sprintf("repos/%s/%s/pulls?head=%s:%s&state=all&per_page=1&sort=updated&direction=desc",
+			owner, repo, owner, branch),
+		&prs,
+	)
+	if err != nil {
+		return PRStateNone, fmt.Errorf("querying PRs for %s/%s branch %s: %w", owner, repo, branch, err)
+	}
+
+	if len(prs) == 0 {
+		return PRStateNone, nil
+	}
+
+	pr := prs[0]
+	if pr.State == "open" {
+		return PRStateOpen, nil
+	}
+	if pr.MergedAt != "" {
+		return PRStateMerged, nil
+	}
+	return PRStateClosed, nil
+}
+
 // sshRemoteRe matches SSH-style GitHub remote URLs:
 //
 //	git@github.com:owner/repo.git

@@ -235,3 +235,120 @@ func TestStaleBranch_Label(t *testing.T) {
 		t.Errorf("Label() = %q, want %q", got, want)
 	}
 }
+
+func TestIsAutomationBranch(t *testing.T) {
+	tests := []struct {
+		branch string
+		want   bool
+	}{
+		{"dependabot/npm_and_yarn/lodash-4.17.21", true},
+		{"dependabot/go_modules/golang.org/x/text-0.14.0", true},
+		{"renovate/all-minor", true},
+		{"renovate/configure", true},
+		{"release-please--branches--main", true},
+		{"release-please--branches--main--components--katazuke", true},
+		{"feature/add-login", false},
+		{"graham/fix-bug", false},
+		{"main", false},
+		{"dependabot", false},
+		{"my-dependabot/thing", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.branch, func(t *testing.T) {
+			if got := branches.IsAutomationBranch(tt.branch); got != tt.want {
+				t.Errorf("IsAutomationBranch(%q) = %v, want %v", tt.branch, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFindStale_IsAutomationField(t *testing.T) {
+	repo := helpers.NewTestRepo(t, "automation-stale")
+
+	staleDate := time.Now().Add(-60 * 24 * time.Hour)
+
+	// Create an automation branch.
+	repo.CreateBranch("dependabot/go_modules/something")
+	repo.WriteFile("dep.txt", "dep update")
+	repo.AddFile("dep.txt")
+	repo.CommitWithDate("dep commit", staleDate)
+	repo.Checkout("main")
+
+	// Create a normal branch.
+	repo.CreateBranch("feature/normal")
+	repo.WriteFile("normal.txt", "normal work")
+	repo.AddFile("normal.txt")
+	repo.CommitWithDate("normal commit", staleDate)
+	repo.Checkout("main")
+
+	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 stale branches, got %d", len(results))
+	}
+
+	byBranch := make(map[string]branches.StaleBranch)
+	for _, r := range results {
+		byBranch[r.Branch] = r
+	}
+
+	dep := byBranch["dependabot/go_modules/something"]
+	if !dep.IsAutomation {
+		t.Error("expected dependabot branch to be marked as automation")
+	}
+
+	normal := byBranch["feature/normal"]
+	if normal.IsAutomation {
+		t.Error("expected feature branch to NOT be marked as automation")
+	}
+}
+
+func TestFindStale_IsOwnBranch(t *testing.T) {
+	repo := helpers.NewTestRepo(t, "own-branch")
+
+	staleDate := time.Now().Add(-60 * 24 * time.Hour)
+
+	// Create a branch by the repo's configured user (test@example.com).
+	repo.CreateBranch("feature/own")
+	repo.WriteFile("own.txt", "own work")
+	repo.AddFile("own.txt")
+	repo.CommitWithDate("own commit", staleDate)
+	repo.Checkout("main")
+
+	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 stale branch, got %d", len(results))
+	}
+	if !results[0].IsOwnBranch {
+		t.Error("expected branch to be marked as own (same author)")
+	}
+}
+
+func TestFindStale_IsLocalOnly(t *testing.T) {
+	repo := helpers.NewTestRepo(t, "local-only")
+
+	staleDate := time.Now().Add(-60 * 24 * time.Hour)
+
+	// In a repo with no remote, all branches are local-only.
+	repo.CreateBranch("feature/local")
+	repo.WriteFile("local.txt", "local work")
+	repo.AddFile("local.txt")
+	repo.CommitWithDate("local commit", staleDate)
+	repo.Checkout("main")
+
+	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 stale branch, got %d", len(results))
+	}
+	if !results[0].IsLocalOnly {
+		t.Error("expected branch to be marked as local-only")
+	}
+}

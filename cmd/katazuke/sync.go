@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -23,9 +22,7 @@ type SyncCmd struct {
 // Run executes the sync command.
 func (c *SyncCmd) Run(globals *CLI) error {
 	if globals.Verbose {
-		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-			Level: slog.LevelDebug,
-		})))
+		enableVerboseLogging()
 	}
 
 	ml := metrics.NewOrNil()
@@ -80,11 +77,12 @@ func (c *SyncCmd) Run(globals *CLI) error {
 	slog.Debug("found repositories", "count", len(repoPaths))
 
 	opts := sync.Options{
-		Strategy:  cfg.Sync.Strategy,
-		SkipDirty: cfg.Sync.SkipDirty,
-		AutoStash: cfg.Sync.AutoStash,
-		DryRun:    globals.DryRun,
-		Verbose:   globals.Verbose,
+		Strategy:           cfg.Sync.Strategy,
+		SkipDirty:          cfg.Sync.SkipDirty,
+		AutoStash:          cfg.Sync.AutoStash,
+		SwitchMergedBranch: cfg.Sync.SwitchMergedBranch,
+		DryRun:             globals.DryRun,
+		Verbose:            globals.Verbose,
 	}
 
 	workers := cfg.Sync.Workers
@@ -96,7 +94,7 @@ func (c *SyncCmd) Run(globals *CLI) error {
 	bold := color.New(color.Bold)
 	dim := color.New(color.FgHiBlack)
 
-	var synced, skipped, failed int
+	var synced, skipped, failed, switched int
 	syncStart := time.Now()
 
 	sync.All(repoPaths, opts, sync.RealGitOps{}, workers, func(completed, total int, r sync.Result) {
@@ -108,6 +106,9 @@ func (c *SyncCmd) Run(globals *CLI) error {
 		case sync.Synced:
 			synced++
 			fmt.Printf("  %s %s\n", green.Sprint("[synced]"), r.RepoName)
+		case sync.Switched:
+			switched++
+			fmt.Printf("  %s %s: %s\n", green.Sprint("[switched]"), r.RepoName, r.Message)
 		case sync.Skipped:
 			skipped++
 			fmt.Printf("  %s %s: %s\n", yellow.Sprint("[skip]"), r.RepoName, r.Message)
@@ -128,7 +129,7 @@ func (c *SyncCmd) Run(globals *CLI) error {
 	// Clear final status line.
 	fmt.Print("\r\033[2K")
 	fmt.Println()
-	summary := fmt.Sprintf("Synced %d, skipped %d, failed %d", synced, skipped, failed)
+	summary := fmt.Sprintf("Synced %d, switched %d, skipped %d, failed %d", synced, switched, skipped, failed)
 	if globals.DryRun {
 		summary += " (dry run)"
 	}

@@ -210,6 +210,12 @@ func MergeTree(repoPath string, base, local, remote string) (string, bool, error
 	return output, hasConflicts, nil
 }
 
+// Checkout switches to the given branch.
+func Checkout(repoPath, branch string) error {
+	_, err := run(repoPath, "checkout", branch)
+	return err
+}
+
 // CreateTag creates a lightweight tag at the given ref.
 func CreateTag(repoPath, tagName, ref string) error {
 	_, err := run(repoPath, "tag", tagName, ref)
@@ -243,6 +249,39 @@ func HasRemoteBranch(repoPath, remote, branch string) (bool, error) {
 // CommitSubject returns the subject line of the latest commit on the given ref.
 func CommitSubject(repoPath, ref string) (string, error) {
 	return run(repoPath, "log", "-1", "--format=%s", ref)
+}
+
+// ConfigValue returns the value of a git config key in the given repo.
+func ConfigValue(repoPath, key string) (string, error) {
+	return run(repoPath, "config", key)
+}
+
+// CommitAuthors returns the set of unique author emails for all commits on
+// branch that are not reachable from base. This identifies who contributed
+// to the branch since it diverged.
+func CommitAuthors(repoPath, branch, base string) ([]string, error) {
+	out, err := run(repoPath, "log", "--format=%ae", base+".."+branch)
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	seen := make(map[string]bool)
+	var authors []string
+	for _, email := range splitNonEmpty(out) {
+		if !seen[email] {
+			seen[email] = true
+			authors = append(authors, email)
+		}
+	}
+	return authors, nil
+}
+
+// HasUpstream returns true if the given branch has a remote tracking branch configured.
+func HasUpstream(repoPath, branch string) bool {
+	_, err := run(repoPath, "rev-parse", "--abbrev-ref", branch+"@{upstream}")
+	return err == nil
 }
 
 // splitNonEmpty splits a newline-separated string and returns non-empty lines.

@@ -28,7 +28,7 @@ type ArchivedRepo struct {
 // FindArchived scans the given repository paths and checks their GitHub
 // archive status. Repos without a GitHub remote are silently skipped.
 // Work is parallelized across the given number of workers.
-func FindArchived(repos []string, checker ArchiveChecker, workers int) ([]ArchivedRepo, error) {
+func FindArchived(repos []string, checker ArchiveChecker, workers int) []ArchivedRepo {
 	results := parallel.Run(repos, workers, func(repoPath string) *ArchivedRepo {
 		return checkArchived(repoPath, checker)
 	}, nil)
@@ -39,7 +39,7 @@ func FindArchived(repos []string, checker ArchiveChecker, workers int) ([]Archiv
 			archived = append(archived, *r)
 		}
 	}
-	return archived, nil
+	return archived
 }
 
 func checkArchived(repoPath string, checker ArchiveChecker) *ArchivedRepo {

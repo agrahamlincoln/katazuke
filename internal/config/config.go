@@ -15,10 +15,11 @@ import (
 
 // SyncConfig holds configuration for the sync command.
 type SyncConfig struct {
-	Strategy  string `yaml:"strategy"`   // "rebase", "merge", or "ff-only"
-	SkipDirty bool   `yaml:"skip_dirty"` // skip dirty repos without merge-tree check
-	AutoStash bool   `yaml:"auto_stash"` // attempt stash/pop for dirty repos
-	Workers   int    `yaml:"workers"`    // number of parallel workers
+	Strategy           string `yaml:"strategy"`             // "rebase", "merge", or "ff-only"
+	SkipDirty          bool   `yaml:"skip_dirty"`           // skip dirty repos without merge-tree check
+	AutoStash          bool   `yaml:"auto_stash"`           // attempt stash/pop for dirty repos
+	SwitchMergedBranch bool   `yaml:"switch_merged_branch"` // auto-switch repos on merged branches to default
+	Workers            int    `yaml:"workers"`              // number of parallel workers
 }
 
 // Config holds all katazuke configuration.
@@ -38,10 +39,11 @@ func Defaults() Config {
 		StaleThresholdDays: 30,
 		ExcludePatterns:    []string{".archive", "vendor"},
 		Sync: SyncConfig{
-			Strategy:  "rebase",
-			SkipDirty: false,
-			AutoStash: true,
-			Workers:   min(4, runtime.NumCPU()),
+			Strategy:           "rebase",
+			SkipDirty:          false,
+			AutoStash:          true,
+			SwitchMergedBranch: true,
+			Workers:            min(4, runtime.NumCPU()),
 		},
 	}
 }
@@ -118,6 +120,11 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("KATAZUKE_SYNC_AUTO_STASH"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.Sync.AutoStash = b
+		}
+	}
+	if v := os.Getenv("KATAZUKE_SYNC_SWITCH_MERGED_BRANCH"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Sync.SwitchMergedBranch = b
 		}
 	}
 	if v := os.Getenv("KATAZUKE_SYNC_WORKERS"); v != "" {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/agrahamlincoln/katazuke/internal/parallel"
@@ -21,11 +22,41 @@ type StaleBranch struct {
 	CommitsAhead      int
 	CommitsBehind     int
 	HasRemote         bool
+	// IsLocalOnly is true when the branch has no remote tracking branch.
+	// These are candidates for cleanup but require extra caution since
+	// commits may not exist anywhere else.
+	IsLocalOnly bool
+	// IsAutomation is true for branches matching known automation patterns
+	// (e.g. dependabot/*, renovate/*, release-please--*).
+	IsAutomation bool
+	// IsOwnBranch is true when the user is the sole author of all commits
+	// on this branch since it diverged from the default branch.
+	IsOwnBranch bool
 }
 
 // Label returns a display string for the stale branch in the form "repo: branch".
 func (s StaleBranch) Label() string {
 	return fmt.Sprintf("%s: %s", s.RepoName, s.Branch)
+}
+
+// automationPrefixes lists branch name prefixes created by automation tools.
+// These branches should be cleaned up locally when safe, but never deleted
+// from remotes since the automation tool manages them.
+var automationPrefixes = []string{
+	"dependabot/",
+	"renovate/",
+	"release-please--",
+}
+
+// IsAutomationBranch returns true if the branch name matches a known
+// automation pattern.
+func IsAutomationBranch(branch string) bool {
+	for _, prefix := range automationPrefixes {
+		if strings.HasPrefix(branch, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // FindStale scans the given repositories and returns branches whose last commit
@@ -91,6 +122,9 @@ func findStaleInRepo(repoPath string, cutoff time.Time) []StaleBranch {
 		mergedSet[b] = true
 	}
 
+	// Get the user's identity for authorship checking.
+	userEmail, _ := git.ConfigValue(repoPath, "user.email")
+
 	var results []StaleBranch
 	for _, branch := range allBranches {
 		if branch == defaultBranch || branch == currentBranch {
@@ -132,6 +166,9 @@ func findStaleInRepo(repoPath string, cutoff time.Time) []StaleBranch {
 				"repo", repoName, "branch", branch, "error", err)
 		}
 
+		isOwn := checkAuthorship(repoPath, branch, defaultBranch, userEmail, repoName)
+		isLocalOnly := !hasRemote && !git.HasUpstream(repoPath, branch)
+
 		results = append(results, StaleBranch{
 			RepoPath:          repoPath,
 			RepoName:          repoName,
@@ -141,8 +178,36 @@ func findStaleInRepo(repoPath string, cutoff time.Time) []StaleBranch {
 			CommitsAhead:      ahead,
 			CommitsBehind:     behind,
 			HasRemote:         hasRemote,
+			IsLocalOnly:       isLocalOnly,
+			IsAutomation:      IsAutomationBranch(branch),
+			IsOwnBranch:       isOwn,
 		})
 	}
 
 	return results
+}
+
+// checkAuthorship returns true if all commits on branch (since diverging from
+// base) were authored by the given email. Returns true if the email is empty
+// (can't determine identity) or if the branch has no unique commits (diverged
+// at the same point).
+func checkAuthorship(repoPath, branch, base, userEmail, repoName string) bool {
+	if userEmail == "" {
+		return true
+	}
+	authors, err := git.CommitAuthors(repoPath, branch, base)
+	if err != nil {
+		slog.Debug("could not check commit authors",
+			"repo", repoName, "branch", branch, "error", err)
+		return true
+	}
+	if len(authors) == 0 {
+		return true
+	}
+	for _, a := range authors {
+		if !strings.EqualFold(a, userEmail) {
+			return false
+		}
+	}
+	return true
 }

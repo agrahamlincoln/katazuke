@@ -25,6 +25,9 @@ func TestDefaults(t *testing.T) {
 	if !cfg.Sync.AutoStash {
 		t.Error("expected sync auto_stash to be true by default")
 	}
+	if !cfg.Sync.SwitchMergedBranch {
+		t.Error("expected sync switch_merged_branch to be true by default")
+	}
 	expectedWorkers := min(4, runtime.NumCPU())
 	if cfg.Sync.Workers != expectedWorkers {
 		t.Errorf("expected sync workers %d, got %d", expectedWorkers, cfg.Sync.Workers)
@@ -118,7 +121,7 @@ func TestSyncConfigFromFile(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(
-		"sync:\n  strategy: ff-only\n  skip_dirty: true\n  auto_stash: false\n  workers: 8\n",
+		"sync:\n  strategy: ff-only\n  skip_dirty: true\n  auto_stash: false\n  switch_merged_branch: false\n  workers: 8\n",
 	), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -136,6 +139,9 @@ func TestSyncConfigFromFile(t *testing.T) {
 	if cfg.Sync.AutoStash {
 		t.Error("expected auto_stash to be false")
 	}
+	if cfg.Sync.SwitchMergedBranch {
+		t.Error("expected switch_merged_branch to be false")
+	}
 	if cfg.Sync.Workers != 8 {
 		t.Errorf("expected workers 8, got %d", cfg.Sync.Workers)
 	}
@@ -146,6 +152,7 @@ func TestSyncEnvOverrides(t *testing.T) {
 	t.Setenv("KATAZUKE_SYNC_STRATEGY", "merge")
 	t.Setenv("KATAZUKE_SYNC_SKIP_DIRTY", "true")
 	t.Setenv("KATAZUKE_SYNC_AUTO_STASH", "false")
+	t.Setenv("KATAZUKE_SYNC_SWITCH_MERGED_BRANCH", "false")
 	t.Setenv("KATAZUKE_SYNC_WORKERS", "16")
 
 	cfg, err := Load()
@@ -160,6 +167,9 @@ func TestSyncEnvOverrides(t *testing.T) {
 	}
 	if cfg.Sync.AutoStash {
 		t.Error("expected auto_stash to be false")
+	}
+	if cfg.Sync.SwitchMergedBranch {
+		t.Error("expected switch_merged_branch to be false")
 	}
 	if cfg.Sync.Workers != 16 {
 		t.Errorf("expected workers 16, got %d", cfg.Sync.Workers)

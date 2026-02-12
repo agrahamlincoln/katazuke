@@ -545,3 +545,76 @@ func TestMergeTree(t *testing.T) {
 		}
 	})
 }
+
+func TestConfigValue(t *testing.T) {
+	repo := helpers.NewTestRepo(t, "config-value")
+
+	email, err := git.ConfigValue(repo.Path, "user.email")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if email != "test@example.com" {
+		t.Errorf("expected test@example.com, got %q", email)
+	}
+}
+
+func TestCommitAuthors(t *testing.T) {
+	repo := helpers.NewTestRepo(t, "commit-authors")
+
+	repo.CreateBranch("feature/authored")
+	repo.WriteFile("a.txt", "a")
+	repo.AddFile("a.txt")
+	repo.Commit("commit by test user")
+	repo.WriteFile("b.txt", "b")
+	repo.AddFile("b.txt")
+	repo.Commit("another commit by test user")
+	repo.Checkout("main")
+
+	authors, err := git.CommitAuthors(repo.Path, "feature/authored", "main")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(authors) != 1 {
+		t.Fatalf("expected 1 unique author, got %d: %v", len(authors), authors)
+	}
+	if authors[0] != "test@example.com" {
+		t.Errorf("expected test@example.com, got %q", authors[0])
+	}
+}
+
+func TestCommitAuthors_NoUniqueCommits(t *testing.T) {
+	repo := helpers.NewTestRepo(t, "no-unique-commits")
+
+	// Branch at same point as main -- no unique commits.
+	repo.CreateBranch("feature/same")
+	repo.Checkout("main")
+
+	authors, err := git.CommitAuthors(repo.Path, "feature/same", "main")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(authors) != 0 {
+		t.Errorf("expected no authors for branch with no unique commits, got %v", authors)
+	}
+}
+
+func TestHasUpstream(t *testing.T) {
+	repo := helpers.NewTestRepo(t, "has-upstream")
+
+	// A local branch with no remote should not have an upstream.
+	repo.CreateBranch("feature/local")
+	repo.Checkout("main")
+
+	if git.HasUpstream(repo.Path, "feature/local") {
+		t.Error("expected feature/local to have no upstream")
+	}
+}
+
+func TestHasUpstream_WithRemote(t *testing.T) {
+	clonePath, _ := setupRemotePair(t, "upstream-remote")
+
+	// "main" in a clone should have an upstream.
+	if !git.HasUpstream(clonePath, "main") {
+		t.Error("expected main to have an upstream in a clone")
+	}
+}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/agrahamlincoln/katazuke/internal/branches"
 	"github.com/agrahamlincoln/katazuke/internal/config"
+	ghclient "github.com/agrahamlincoln/katazuke/internal/github"
 	"github.com/agrahamlincoln/katazuke/internal/metrics"
 	"github.com/agrahamlincoln/katazuke/internal/scanner"
 	"github.com/agrahamlincoln/katazuke/pkg/git"
@@ -41,27 +42,34 @@ type CLI struct {
 
 // BranchesCmd handles branch management across repositories.
 type BranchesCmd struct {
-	Merged    bool `help:"Show only merged branches." xor:"mode"`
-	Stale     bool `help:"Show only stale branches." xor:"mode"`
-	StaleDays int  `name:"stale-days" help:"Days before a branch is considered stale." default:"30"`
+	Merged    bool `help:"Filter to only merged branches."`
+	Stale     bool `help:"Filter to only stale branches."`
+	StaleDays int  `name:"stale-days" help:"Days before a branch is considered stale (only applies to stale filtering)." default:"30"`
 }
 
 // Run executes the branches command.
+// When neither --merged nor --stale is specified, both are shown.
 func (c *BranchesCmd) Run(globals *CLI) error {
-	if !c.Merged && !c.Stale {
-		return fmt.Errorf("specify --merged or --stale")
+	showBoth := !c.Merged && !c.Stale
+
+	if c.Merged || showBoth {
+		if err := c.runMerged(globals); err != nil {
+			return err
+		}
 	}
 
-	if c.Merged {
-		return c.runMerged(globals)
+	if c.Stale || showBoth {
+		if err := c.runStale(globals); err != nil {
+			return err
+		}
 	}
 
-	return c.runStale(globals)
+	return nil
 }
 
 func (c *BranchesCmd) runMerged(globals *CLI) error {
 	if globals.Verbose {
-		slog.SetLogLoggerLevel(slog.LevelDebug)
+		enableVerboseLogging()
 	}
 
 	// Metrics are best-effort local telemetry for improving katazuke.
@@ -275,7 +283,7 @@ func deleteSelectedBranches(selected []branches.MergedBranch, deleteRemote bool)
 
 func (c *BranchesCmd) runStale(globals *CLI) error {
 	if globals.Verbose {
-		slog.SetLogLoggerLevel(slog.LevelDebug)
+		enableVerboseLogging()
 	}
 
 	// Metrics logging errors are discarded; see comment in runMerged.
@@ -328,6 +336,10 @@ func (c *BranchesCmd) runStale(globals *CLI) error {
 	}
 	_ = ml.LogPerf(len(repos), int(time.Since(scanStart).Milliseconds()))
 
+	// Filter out branches with open PRs using GitHub API.
+	gh := ghclient.NewClient(cfg.GithubToken)
+	stale = filterByPRStatus(stale, gh)
+
 	if len(stale) == 0 {
 		fmt.Println("No stale branches found.")
 		return nil
@@ -342,9 +354,55 @@ func (c *BranchesCmd) runStale(globals *CLI) error {
 	return promptAndExecuteStaleActions(stale, ml)
 }
 
+// filterByPRStatus uses the GitHub API to exclude branches with open PRs
+// from the stale list. Branches whose PRs were merged are kept as cleanup
+// candidates. API failures are logged but do not prevent the branch from
+// appearing in results (fail-open).
+func filterByPRStatus(stale []branches.StaleBranch, gh *ghclient.Client) []branches.StaleBranch {
+	slog.Debug("checking PR status for stale branches", "count", len(stale))
+
+	filtered := make([]branches.StaleBranch, 0, len(stale))
+	for _, s := range stale {
+		if !s.HasRemote {
+			filtered = append(filtered, s)
+			continue
+		}
+
+		remote, err := git.RemoteURL(s.RepoPath, "origin")
+		if err != nil {
+			filtered = append(filtered, s)
+			continue
+		}
+
+		owner, repo, ok := ghclient.ParseGitHubRemote(remote)
+		if !ok {
+			filtered = append(filtered, s)
+			continue
+		}
+
+		prState, err := gh.BranchPRState(owner, repo, s.Branch)
+		if err != nil {
+			slog.Debug("could not check PR status, keeping branch in results",
+				"repo", s.RepoName, "branch", s.Branch, "error", err)
+			filtered = append(filtered, s)
+			continue
+		}
+
+		if prState == ghclient.PRStateOpen {
+			slog.Debug("excluding branch with open PR",
+				"repo", s.RepoName, "branch", s.Branch)
+			continue
+		}
+
+		filtered = append(filtered, s)
+	}
+	return filtered
+}
+
 func printStaleSummary(stale []branches.StaleBranch) {
 	bold := color.New(color.Bold)
 	dim := color.New(color.FgHiBlack)
+	yellow := color.New(color.FgYellow)
 
 	fmt.Printf("\n%s\n\n", bold.Sprintf("Found %d stale branch(es):", len(stale)))
 
@@ -356,16 +414,37 @@ func printStaleSummary(stale []branches.StaleBranch) {
 		}
 		age := formatAge(s.LastCommit)
 		subject := truncate(s.LastCommitMessage, maxCommitSummaryLen)
-		remote := ""
+
+		var tags []string
 		if s.HasRemote {
-			remote = " [remote]"
+			tags = append(tags, "remote")
 		}
-		fmt.Printf("    %s  %s  %s  +%d/-%d%s\n",
+		if s.IsLocalOnly {
+			tags = append(tags, "local-only")
+		}
+		if s.IsAutomation {
+			tags = append(tags, "automation")
+		}
+		if !s.IsOwnBranch {
+			tags = append(tags, "other-author")
+		}
+		tagStr := ""
+		if len(tags) > 0 {
+			tagStr = " [" + strings.Join(tags, ", ") + "]"
+		}
+
+		// Highlight local-only branches with commits ahead to warn about data loss.
+		aheadStr := fmt.Sprintf("+%d", s.CommitsAhead)
+		if s.IsLocalOnly && s.CommitsAhead > 0 {
+			aheadStr = yellow.Sprintf("+%d", s.CommitsAhead)
+		}
+
+		fmt.Printf("    %s  %s  %s  %s/-%d%s\n",
 			s.Branch,
 			dim.Sprintf("(%s)", age),
 			dim.Sprint(subject),
-			s.CommitsAhead, s.CommitsBehind,
-			dim.Sprint(remote),
+			aheadStr, s.CommitsBehind,
+			dim.Sprint(tagStr),
 		)
 	}
 	fmt.Println()
@@ -422,6 +501,31 @@ func promptAndExecuteStaleActions(stale []branches.StaleBranch, ml *metrics.Logg
 	return executeStaleActions(stale, actions)
 }
 
+// safeToDeleteRemote returns true if the branch can safely have its remote
+// deleted. Automation branches and branches with other contributors should
+// never have their remotes deleted by this tool.
+func safeToDeleteRemote(s branches.StaleBranch) bool {
+	return !s.IsAutomation && s.IsOwnBranch
+}
+
+// deleteRemoteIfSafe attempts to delete the remote branch if it exists and
+// passes safety checks. Skips silently if the branch has no remote or fails
+// safety checks.
+func deleteRemoteIfSafe(s branches.StaleBranch) error {
+	if !s.HasRemote {
+		return nil
+	}
+	if !safeToDeleteRemote(s) {
+		fmt.Printf("  skipped remote deletion for %s in %s (automation or other-author)\n", s.Branch, s.RepoName)
+		return nil
+	}
+	if err := git.DeleteRemoteBranch(s.RepoPath, "origin", s.Branch); err != nil {
+		return err
+	}
+	fmt.Printf("  deleted remote %s in %s\n", s.Branch, s.RepoName)
+	return nil
+}
+
 func executeStaleActions(stale []branches.StaleBranch, actions map[int]staleAction) error {
 	bold := color.New(color.Bold)
 	var failures []string
@@ -450,13 +554,10 @@ func executeStaleActions(stale []branches.StaleBranch, actions map[int]staleActi
 			}
 			fmt.Printf("  deleted local %s in %s\n", s.Branch, s.RepoName)
 
-			if s.HasRemote {
-				if err := git.DeleteRemoteBranch(s.RepoPath, "origin", s.Branch); err != nil {
-					fmt.Printf("  failed to delete remote %s in %s: %v\n", s.Branch, s.RepoName, err)
-					failures = append(failures, s.Label())
-					continue
-				}
-				fmt.Printf("  deleted remote %s in %s\n", s.Branch, s.RepoName)
+			if err := deleteRemoteIfSafe(s); err != nil {
+				fmt.Printf("  failed to delete remote %s in %s: %v\n", s.Branch, s.RepoName, err)
+				failures = append(failures, s.Label())
+				continue
 			}
 			archived++
 
@@ -468,13 +569,10 @@ func executeStaleActions(stale []branches.StaleBranch, actions map[int]staleActi
 			}
 			fmt.Printf("  deleted %s in %s\n", s.Branch, s.RepoName)
 
-			if s.HasRemote {
-				if err := git.DeleteRemoteBranch(s.RepoPath, "origin", s.Branch); err != nil {
-					fmt.Printf("  failed to delete remote %s in %s: %v\n", s.Branch, s.RepoName, err)
-					failures = append(failures, s.Label())
-					continue
-				}
-				fmt.Printf("  deleted remote %s in %s\n", s.Branch, s.RepoName)
+			if err := deleteRemoteIfSafe(s); err != nil {
+				fmt.Printf("  failed to delete remote %s in %s: %v\n", s.Branch, s.RepoName, err)
+				failures = append(failures, s.Label())
+				continue
 			}
 			deleted++
 		}
@@ -539,6 +637,14 @@ func branchFingerprint(repoPath, branch string) string {
 		remote = repoPath
 	}
 	return metrics.Fingerprint(remote, branch)
+}
+
+// enableVerboseLogging configures the default slog logger to emit debug-level
+// messages to stderr.
+func enableVerboseLogging() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	})))
 }
 
 func expandHome(path string) string {

@@ -35,6 +35,16 @@ func (RealGitOps) Pull(repoPath string, strategy string) error {
 	return git.Pull(repoPath, strategy)
 }
 
+// IsMerged returns true if the given branch has been merged into base.
+func (RealGitOps) IsMerged(repoPath, branch, base string) (bool, error) {
+	return git.IsMerged(repoPath, branch, base)
+}
+
+// Checkout switches to the given branch.
+func (RealGitOps) Checkout(repoPath, branch string) error {
+	return git.Checkout(repoPath, branch)
+}
+
 // MergeBase returns the best common ancestor commit between two refs.
 func (RealGitOps) MergeBase(repoPath string, ref1, ref2 string) (string, error) {
 	return git.MergeBase(repoPath, ref1, ref2)
