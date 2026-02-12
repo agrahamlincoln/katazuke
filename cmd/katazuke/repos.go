@@ -98,11 +98,14 @@ func (c *ReposCmd) runAll(globals *CLI) error {
 	_ = ml.LogCommand("repos", flags)
 
 	bold := color.New(color.Bold)
+	workers := cfg.Sync.Workers
+	slog.Debug("using worker pool", "workers", workers)
 
 	scanStart := time.Now()
 
 	// Repository summary.
-	summary := repos.Summarize(repoPaths, cfg.Sync.Workers)
+	fmt.Printf("Summarizing %d repositories...\n", len(repoPaths))
+	summary := repos.Summarize(repoPaths, workers, progressPrinter())
 	fmt.Printf("\n%s\n", bold.Sprint("Repository Summary"))
 	fmt.Printf("  Total: %d\n", summary.Total)
 	fmt.Printf("  Clean: %d\n", summary.Clean)
@@ -110,11 +113,13 @@ func (c *ReposCmd) runAll(globals *CLI) error {
 	fmt.Println()
 
 	// Find merged branch repos.
-	mergedRepos := repos.FindOnMergedBranch(repoPaths, cfg.Sync.Workers)
+	fmt.Printf("Checking for repos on merged branches...\n")
+	mergedRepos := repos.FindOnMergedBranch(repoPaths, workers, progressPrinter())
 
 	// Find archived repos.
 	ghClient := github.NewClient(cfg.GithubToken)
-	archived := repos.FindArchived(repoPaths, ghClient, cfg.Sync.Workers)
+	fmt.Printf("Checking archive status...\n")
+	archived := repos.FindArchived(repoPaths, ghClient, workers, progressPrinter())
 
 	_ = ml.LogPerf(len(repoPaths), int(time.Since(scanStart).Milliseconds()))
 
@@ -170,8 +175,12 @@ func (c *ReposCmd) runMerged(globals *CLI) error {
 	}
 	_ = ml.LogCommand("repos --merged", flags)
 
+	workers := cfg.Sync.Workers
+	slog.Debug("using worker pool", "workers", workers)
+	fmt.Printf("Checking %d repositories for merged branches...\n", len(repoPaths))
+
 	scanStart := time.Now()
-	mergedRepos := repos.FindOnMergedBranch(repoPaths, cfg.Sync.Workers)
+	mergedRepos := repos.FindOnMergedBranch(repoPaths, workers, progressPrinter())
 	_ = ml.LogPerf(len(repoPaths), int(time.Since(scanStart).Milliseconds()))
 
 	if len(mergedRepos) == 0 {
@@ -209,12 +218,15 @@ func (c *ReposCmd) runArchived(globals *CLI) error {
 	}
 	_ = ml.LogCommand("repos --archived", flags)
 
+	workers := cfg.Sync.Workers
+	slog.Debug("using worker pool", "workers", workers)
+
 	scanStart := time.Now()
 	ghClient := github.NewClient(cfg.GithubToken)
 
 	fmt.Printf("Checking archive status of %d repositories...\n", len(repoPaths))
 
-	archived := repos.FindArchived(repoPaths, ghClient, cfg.Sync.Workers)
+	archived := repos.FindArchived(repoPaths, ghClient, workers, progressPrinter())
 	_ = ml.LogPerf(len(repoPaths), int(time.Since(scanStart).Milliseconds()))
 
 	if len(archived) == 0 {

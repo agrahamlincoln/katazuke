@@ -18,7 +18,7 @@ func TestFindStale_NoStaleBranches(t *testing.T) {
 	repo.Commit("active commit")
 	repo.Checkout("main")
 
-	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1)
+	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestFindStale_OneStaleBranch(t *testing.T) {
 	repo.CommitWithDate("old commit", staleDate)
 	repo.Checkout("main")
 
-	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1)
+	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestFindStale_ExcludesMergedBranches(t *testing.T) {
 	repo.Checkout("main")
 	repo.Merge("feature/merged-old")
 
-	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1)
+	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestFindStale_ExcludesDefaultAndCurrentBranch(t *testing.T) {
 	repo.CommitWithDate("stale commit", staleDate)
 	repo.Checkout("main")
 
-	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1)
+	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestFindStale_RespectsThreshold(t *testing.T) {
 	repo.Checkout("main")
 
 	// With a 30-day threshold, this should not be stale.
-	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1)
+	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestFindStale_RespectsThreshold(t *testing.T) {
 	}
 
 	// With a 7-day threshold, this should be stale.
-	results, err = branches.FindStale([]string{repo.Path}, 7*24*time.Hour, 1)
+	results, err = branches.FindStale([]string{repo.Path}, 7*24*time.Hour, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestFindStale_MultipleRepos(t *testing.T) {
 	repo2.CommitWithDate("old c", staleDate)
 	repo2.Checkout("main")
 
-	results, err := branches.FindStale([]string{repo1.Path, repo2.Path}, 30*24*time.Hour, 1)
+	results, err := branches.FindStale([]string{repo1.Path, repo2.Path}, 30*24*time.Hour, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestFindStale_CommitsAheadBehind(t *testing.T) {
 	repo.AddFile("main-update.txt")
 	repo.Commit("main update")
 
-	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1)
+	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestFindStale_CommitsAheadBehind(t *testing.T) {
 }
 
 func TestFindStale_EmptyRepoList(t *testing.T) {
-	results, err := branches.FindStale(nil, 30*24*time.Hour, 1)
+	results, err := branches.FindStale(nil, 30*24*time.Hour, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestFindStale_IsAutomationField(t *testing.T) {
 	repo.CommitWithDate("normal commit", staleDate)
 	repo.Checkout("main")
 
-	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1)
+	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestFindStale_IsOwnBranch(t *testing.T) {
 	repo.CommitWithDate("own commit", staleDate)
 	repo.Checkout("main")
 
-	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1)
+	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestFindStale_IsLocalOnly(t *testing.T) {
 	repo.CommitWithDate("local commit", staleDate)
 	repo.Checkout("main")
 
-	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1)
+	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

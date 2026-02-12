@@ -101,7 +101,7 @@ func TestFindArchived(t *testing.T) {
 	}
 
 	repoPaths := []string{archivedClean, archivedDirty, active, noRemote, gitlab}
-	result := repos.FindArchived(repoPaths, checker, 1)
+	result := repos.FindArchived(repoPaths, checker, 1, nil)
 
 	if len(result) != 2 {
 		t.Fatalf("expected 2 archived repos, got %d: %+v", len(result), result)
@@ -136,7 +136,7 @@ func TestFindArchivedAPIError(t *testing.T) {
 		},
 	}
 
-	result := repos.FindArchived([]string{errRepo}, checker, 1)
+	result := repos.FindArchived([]string{errRepo}, checker, 1, nil)
 
 	// API errors should be skipped gracefully.
 	if len(result) != 0 {
@@ -147,7 +147,7 @@ func TestFindArchivedAPIError(t *testing.T) {
 func TestFindArchivedEmpty(t *testing.T) {
 	checker := &mockChecker{archived: map[string]bool{}}
 
-	result := repos.FindArchived(nil, checker, 1)
+	result := repos.FindArchived(nil, checker, 1, nil)
 	if len(result) != 0 {
 		t.Fatalf("expected 0 results for empty input, got %d", len(result))
 	}

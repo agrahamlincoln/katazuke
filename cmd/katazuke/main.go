@@ -111,7 +111,11 @@ func (c *BranchesCmd) runMerged(globals *CLI) error {
 
 	slog.Debug("found repositories", "count", len(repos))
 
-	merged, err := branches.FindMerged(repos, cfg.Sync.Workers)
+	workers := cfg.Sync.Workers
+	slog.Debug("using worker pool", "workers", workers)
+	fmt.Printf("Scanning %d repositories for merged branches...\n", len(repos))
+
+	merged, err := branches.FindMerged(repos, workers, progressPrinter())
 	if err != nil {
 		return fmt.Errorf("finding merged branches: %w", err)
 	}
@@ -329,8 +333,12 @@ func (c *BranchesCmd) runStale(globals *CLI) error {
 
 	slog.Debug("found repositories", "count", len(repos))
 
+	workers := cfg.Sync.Workers
+	slog.Debug("using worker pool", "workers", workers)
+	fmt.Printf("Scanning %d repositories for stale branches...\n", len(repos))
+
 	threshold := time.Duration(staleDays) * 24 * time.Hour
-	stale, err := branches.FindStale(repos, threshold, cfg.Sync.Workers)
+	stale, err := branches.FindStale(repos, threshold, workers, progressPrinter())
 	if err != nil {
 		return fmt.Errorf("finding stale branches: %w", err)
 	}
@@ -361,8 +369,12 @@ func (c *BranchesCmd) runStale(globals *CLI) error {
 func filterByPRStatus(stale []branches.StaleBranch, gh *ghclient.Client) []branches.StaleBranch {
 	slog.Debug("checking PR status for stale branches", "count", len(stale))
 
+	dim := color.New(color.FgHiBlack)
+	fmt.Printf("Checking PR status for %d branches...\n", len(stale))
+
 	filtered := make([]branches.StaleBranch, 0, len(stale))
-	for _, s := range stale {
+	for i, s := range stale {
+		fmt.Printf("%s  %s", clearLine, dim.Sprintf("[%d/%d]", i+1, len(stale)))
 		if !s.HasRemote {
 			filtered = append(filtered, s)
 			continue
@@ -396,6 +408,7 @@ func filterByPRStatus(stale []branches.StaleBranch, gh *ghclient.Client) []branc
 
 		filtered = append(filtered, s)
 	}
+	fmt.Print(clearLine)
 	return filtered
 }
 
@@ -455,6 +468,25 @@ const (
 	maxCommitSummaryLen     = 50
 	maxCommitDescriptionLen = 40
 )
+
+// clearLine is the ANSI escape sequence to move the cursor to the start
+// of the line and erase its contents.
+const clearLine = "\r\033[2K"
+
+// progressPrinter returns a callback that displays an inline progress
+// counter. The line is cleared when all items complete.
+func progressPrinter() func(completed, total int) {
+	dim := color.New(color.FgHiBlack)
+	return func(completed, total int) {
+		remaining := total - completed
+		if remaining > 0 {
+			fmt.Printf("%s  %s %d remaining...",
+				clearLine, dim.Sprintf("[%d/%d]", completed, total), remaining)
+		} else {
+			fmt.Print(clearLine)
+		}
+	}
+}
 
 // staleAction represents a user-selected action for a stale branch.
 type staleAction string

@@ -31,7 +31,7 @@ func TestFindOnMergedBranch(t *testing.T) {
 	onDefault := helpers.NewTestRepo(t, "on-default")
 
 	repoPaths := []string{merged.Path, unmerged.Path, onDefault.Path}
-	result := repos.FindOnMergedBranch(repoPaths, 1)
+	result := repos.FindOnMergedBranch(repoPaths, 1, nil)
 
 	if len(result) != 1 {
 		t.Fatalf("expected 1 merged branch repo, got %d", len(result))
@@ -65,7 +65,7 @@ func TestFindOnMergedBranchDirty(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 
-	result := repos.FindOnMergedBranch([]string{dirtyMerged.Path}, 1)
+	result := repos.FindOnMergedBranch([]string{dirtyMerged.Path}, 1, nil)
 
 	if len(result) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(result))
@@ -76,7 +76,7 @@ func TestFindOnMergedBranchDirty(t *testing.T) {
 }
 
 func TestFindOnMergedBranchEmpty(t *testing.T) {
-	result := repos.FindOnMergedBranch(nil, 1)
+	result := repos.FindOnMergedBranch(nil, 1, nil)
 	if len(result) != 0 {
 		t.Fatalf("expected 0 results for empty input, got %d", len(result))
 	}

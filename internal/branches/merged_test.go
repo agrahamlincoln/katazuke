@@ -21,7 +21,7 @@ func TestFindMerged_NoMergedBranches(t *testing.T) {
 	repo.Commit("wip commit")
 	repo.Checkout("main")
 
-	results, err := branches.FindMerged([]string{repo.Path}, 1)
+	results, err := branches.FindMerged([]string{repo.Path}, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestFindMerged_OneMergedBranch(t *testing.T) {
 	repo.Checkout("main")
 	repo.Merge("feature/done")
 
-	results, err := branches.FindMerged([]string{repo.Path}, 1)
+	results, err := branches.FindMerged([]string{repo.Path}, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestFindMerged_ExcludesDefaultAndCurrentBranch(t *testing.T) {
 	repo.Checkout("main")
 	repo.Merge("feature/merged")
 
-	results, err := branches.FindMerged([]string{repo.Path}, 1)
+	results, err := branches.FindMerged([]string{repo.Path}, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestFindMerged_MultipleRepos(t *testing.T) {
 	repo2.Checkout("main")
 	repo2.Merge("feature/c")
 
-	results, err := branches.FindMerged([]string{repo1.Path, repo2.Path}, 1)
+	results, err := branches.FindMerged([]string{repo1.Path, repo2.Path}, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestFindMerged_CommitDateIsPopulated(t *testing.T) {
 	repo.Checkout("main")
 	repo.Merge("feature/dated")
 
-	results, err := branches.FindMerged([]string{repo.Path}, 1)
+	results, err := branches.FindMerged([]string{repo.Path}, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestFindMerged_CommitDateIsPopulated(t *testing.T) {
 }
 
 func TestFindMerged_EmptyRepoList(t *testing.T) {
-	results, err := branches.FindMerged(nil, 1)
+	results, err := branches.FindMerged(nil, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestFindMerged_HasRemoteField(t *testing.T) {
 	gitRun(t, clonePath, "checkout", "main")
 	gitRun(t, clonePath, "merge", "--no-ff", "feature/local-only", "-m", "Merge feature/local-only")
 
-	results, err := branches.FindMerged([]string{clonePath}, 1)
+	results, err := branches.FindMerged([]string{clonePath}, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestFindMerged_HasRemoteFalseWithoutOrigin(t *testing.T) {
 	repo.Checkout("main")
 	repo.Merge("feature/done")
 
-	results, err := branches.FindMerged([]string{repo.Path}, 1)
+	results, err := branches.FindMerged([]string{repo.Path}, 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

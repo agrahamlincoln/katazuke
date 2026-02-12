@@ -25,8 +25,15 @@ type MergedBranch struct {
 // merged into each repo's default branch. The current branch and the default
 // branch itself are excluded from results. Work is parallelized across the
 // given number of workers.
-func FindMerged(repos []string, workers int) ([]MergedBranch, error) {
-	repoResults := parallel.Run(repos, workers, findMergedInRepo, nil)
+func FindMerged(repos []string, workers int, onProgress func(completed, total int)) ([]MergedBranch, error) {
+	var resultCb func(int, int, []MergedBranch)
+	if onProgress != nil {
+		resultCb = func(completed, total int, _ []MergedBranch) {
+			onProgress(completed, total)
+		}
+	}
+
+	repoResults := parallel.Run(repos, workers, findMergedInRepo, resultCb)
 
 	results := make([]MergedBranch, 0, len(repoResults))
 	for _, rr := range repoResults {

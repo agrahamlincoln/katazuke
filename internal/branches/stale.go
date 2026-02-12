@@ -63,7 +63,7 @@ func IsAutomationBranch(branch string) bool {
 // is older than the given threshold. Merged branches, the default branch, and
 // the currently checked out branch are excluded. Work is parallelized across
 // the given number of workers.
-func FindStale(repos []string, threshold time.Duration, workers int) ([]StaleBranch, error) {
+func FindStale(repos []string, threshold time.Duration, workers int, onProgress func(completed, total int)) ([]StaleBranch, error) {
 	cutoff := time.Now().Add(-threshold)
 
 	type staleArgs struct {
@@ -76,9 +76,16 @@ func FindStale(repos []string, threshold time.Duration, workers int) ([]StaleBra
 		args[i] = staleArgs{repoPath: r, cutoff: cutoff}
 	}
 
+	var resultCb func(int, int, []StaleBranch)
+	if onProgress != nil {
+		resultCb = func(completed, total int, _ []StaleBranch) {
+			onProgress(completed, total)
+		}
+	}
+
 	repoResults := parallel.Run(args, workers, func(a staleArgs) []StaleBranch {
 		return findStaleInRepo(a.repoPath, a.cutoff)
-	}, nil)
+	}, resultCb)
 
 	results := make([]StaleBranch, 0, len(repoResults))
 	for _, rr := range repoResults {

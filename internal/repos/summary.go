@@ -24,7 +24,14 @@ type Summary struct {
 }
 
 // Summarize collects basic health info for all given repositories.
-func Summarize(repos []string, workers int) Summary {
+func Summarize(repos []string, workers int, onProgress func(completed, total int)) Summary {
+	var resultCb func(int, int, RepoStatus)
+	if onProgress != nil {
+		resultCb = func(completed, total int, _ RepoStatus) {
+			onProgress(completed, total)
+		}
+	}
+
 	results := parallel.Run(repos, workers, func(repoPath string) RepoStatus {
 		name := filepath.Base(repoPath)
 		clean, err := git.IsClean(repoPath)
@@ -41,7 +48,7 @@ func Summarize(repos []string, workers int) Summary {
 			IsClean: clean,
 			Branch:  branch,
 		}
-	}, nil)
+	}, resultCb)
 
 	s := Summary{Total: len(results)}
 	for _, r := range results {

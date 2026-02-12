@@ -24,8 +24,15 @@ type MergedBranchRepo struct {
 //
 // Note: this operates on locally cached remote refs without fetching first,
 // so results reflect the last fetch rather than current remote state.
-func FindOnMergedBranch(repos []string, workers int) []MergedBranchRepo {
-	results := parallel.Run(repos, workers, checkMergedBranch, nil)
+func FindOnMergedBranch(repos []string, workers int, onProgress func(completed, total int)) []MergedBranchRepo {
+	var resultCb func(int, int, *MergedBranchRepo)
+	if onProgress != nil {
+		resultCb = func(completed, total int, _ *MergedBranchRepo) {
+			onProgress(completed, total)
+		}
+	}
+
+	results := parallel.Run(repos, workers, checkMergedBranch, resultCb)
 
 	var merged []MergedBranchRepo
 	for _, r := range results {

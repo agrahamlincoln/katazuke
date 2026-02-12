@@ -86,7 +86,8 @@ func (c *SyncCmd) Run(globals *CLI) error {
 	}
 
 	workers := cfg.Sync.Workers
-	fmt.Printf("Syncing %d repositories (%d workers)...\n\n", len(repoPaths), workers)
+	slog.Debug("using worker pool", "workers", workers)
+	fmt.Printf("Syncing %d repositories...\n\n", len(repoPaths))
 
 	green := color.New(color.FgGreen)
 	yellow := color.New(color.FgYellow)
@@ -101,7 +102,7 @@ func (c *SyncCmd) Run(globals *CLI) error {
 		remaining := total - completed
 
 		// Clear the status line, print result, redraw status.
-		fmt.Print("\r\033[2K")
+		fmt.Print(clearLine)
 		switch r.Status {
 		case sync.Synced:
 			synced++
@@ -118,8 +119,8 @@ func (c *SyncCmd) Run(globals *CLI) error {
 		}
 
 		if remaining > 0 {
-			fmt.Printf("\r\033[2K  %s %d remaining...",
-				dim.Sprintf("[%d/%d]", completed, total),
+			fmt.Printf("%s  %s %d remaining...",
+				clearLine, dim.Sprintf("[%d/%d]", completed, total),
 				remaining)
 		}
 	})
@@ -127,7 +128,7 @@ func (c *SyncCmd) Run(globals *CLI) error {
 	_ = ml.LogPerf(len(repoPaths), int(time.Since(syncStart).Milliseconds()))
 
 	// Clear final status line.
-	fmt.Print("\r\033[2K")
+	fmt.Print(clearLine)
 	fmt.Println()
 	summary := fmt.Sprintf("Synced %d, switched %d, skipped %d, failed %d", synced, switched, skipped, failed)
 	if globals.DryRun {
