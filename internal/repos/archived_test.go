@@ -53,6 +53,8 @@ func gitInit(t *testing.T, path string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git init %s: %v\n%s", path, err, out)
 	}
+	gitRun(t, path, "config", "user.name", "Test User")
+	gitRun(t, path, "config", "user.email", "test@example.com")
 }
 
 func gitRun(t *testing.T, dir string, args ...string) {
