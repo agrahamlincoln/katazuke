@@ -35,3 +35,6 @@ bin/
 
 # Config for testing
 .katazuke.test.yaml
+
+# Claude Code local settings (personal, not shared)
+.claude/settings.local.json

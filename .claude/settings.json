@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build:*)",
+      "Bash(go test:*)",
+      "Bash(go vet:*)",
+      "Bash(go fmt:*)",
+      "Bash(gofmt:*)",
+      "Bash(go mod download:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(go run:*)",
+      "Bash(golangci-lint run:*)",
+      "Bash(just build:*)",
+      "Bash(just test:*)",
+      "Bash(just lint:*)",
+      "Bash(just fmt:*)",
+      "Bash(just deps:*)",
+      "Bash(just clean:*)",
+      "Bash(just pre-commit:*)",
+      "Bash(just version:*)",
+      "Bash(just run:*)",
+      "Bash(just setup:*)",
+      "Bash(just --list:*)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git describe:*)"
+    ]
+  }
+}
