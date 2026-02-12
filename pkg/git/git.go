@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// run executes a git command in the given directory and returns its output.
+// run wraps git command execution with consistent error formatting and output trimming.
 func run(repoPath string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = repoPath
@@ -208,6 +208,41 @@ func MergeTree(repoPath string, base, local, remote string) (string, bool, error
 	// Old-style merge-tree outputs conflict markers when there are conflicts.
 	hasConflicts := strings.Contains(output, "<<<<<<")
 	return output, hasConflicts, nil
+}
+
+// CreateTag creates a lightweight tag at the given ref.
+func CreateTag(repoPath, tagName, ref string) error {
+	_, err := run(repoPath, "tag", tagName, ref)
+	return err
+}
+
+// CommitsAheadBehind returns the number of commits that branch is ahead of and
+// behind base. This uses rev-list to count commits reachable from one ref but
+// not the other.
+func CommitsAheadBehind(repoPath, branch, base string) (ahead int, behind int, err error) {
+	out, err := run(repoPath, "rev-list", "--left-right", "--count", base+"..."+branch)
+	if err != nil {
+		return 0, 0, err
+	}
+	_, err = fmt.Sscanf(out, "%d\t%d", &behind, &ahead)
+	if err != nil {
+		return 0, 0, fmt.Errorf("parsing rev-list output %q: %w", out, err)
+	}
+	return ahead, behind, nil
+}
+
+// HasRemoteBranch returns true if the given branch exists on the specified remote.
+func HasRemoteBranch(repoPath, remote, branch string) (bool, error) {
+	out, err := run(repoPath, "branch", "-r", "--list", remote+"/"+branch)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) != "", nil
+}
+
+// CommitSubject returns the subject line of the latest commit on the given ref.
+func CommitSubject(repoPath, ref string) (string, error) {
+	return run(repoPath, "log", "-1", "--format=%s", ref)
 }
 
 // splitNonEmpty splits a newline-separated string and returns non-empty lines.

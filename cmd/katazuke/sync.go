@@ -5,10 +5,12 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/fatih/color"
 
 	"github.com/agrahamlincoln/katazuke/internal/config"
+	"github.com/agrahamlincoln/katazuke/internal/metrics"
 	"github.com/agrahamlincoln/katazuke/internal/scanner"
 	"github.com/agrahamlincoln/katazuke/internal/sync"
 )
@@ -25,6 +27,21 @@ func (c *SyncCmd) Run(globals *CLI) error {
 			Level: slog.LevelDebug,
 		})))
 	}
+
+	ml := metrics.NewOrNil()
+	defer func() { _ = ml.Close() }()
+
+	var flags []string
+	if globals.DryRun {
+		flags = append(flags, "--dry-run")
+	}
+	if globals.Verbose {
+		flags = append(flags, "--verbose")
+	}
+	if c.Pattern != "" {
+		flags = append(flags, fmt.Sprintf("--pattern=%s", c.Pattern))
+	}
+	_ = ml.LogCommand("sync", flags)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -80,6 +97,7 @@ func (c *SyncCmd) Run(globals *CLI) error {
 	dim := color.New(color.FgHiBlack)
 
 	var synced, skipped, failed int
+	syncStart := time.Now()
 
 	sync.All(repoPaths, opts, sync.RealGitOps{}, workers, func(completed, total int, r sync.Result) {
 		remaining := total - completed
@@ -104,6 +122,8 @@ func (c *SyncCmd) Run(globals *CLI) error {
 				remaining)
 		}
 	})
+
+	_ = ml.LogPerf(len(repoPaths), int(time.Since(syncStart).Milliseconds()))
 
 	// Clear final status line.
 	fmt.Print("\r\033[2K")

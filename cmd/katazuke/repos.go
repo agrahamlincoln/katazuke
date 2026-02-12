@@ -4,14 +4,17 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/fatih/color"
 
 	"github.com/agrahamlincoln/katazuke/internal/config"
 	"github.com/agrahamlincoln/katazuke/internal/github"
+	"github.com/agrahamlincoln/katazuke/internal/metrics"
 	"github.com/agrahamlincoln/katazuke/internal/repos"
 	"github.com/agrahamlincoln/katazuke/internal/scanner"
+	"github.com/agrahamlincoln/katazuke/pkg/git"
 )
 
 // ReposCmd handles repository checkout management.
@@ -38,6 +41,18 @@ func (c *ReposCmd) runArchived(globals *CLI) error {
 		})))
 	}
 
+	ml := metrics.NewOrNil()
+	defer func() { _ = ml.Close() }()
+
+	var flags []string
+	if globals.DryRun {
+		flags = append(flags, "--dry-run")
+	}
+	if globals.Verbose {
+		flags = append(flags, "--verbose")
+	}
+	_ = ml.LogCommand("repos --archived", flags)
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -50,6 +65,7 @@ func (c *ReposCmd) runArchived(globals *CLI) error {
 
 	fmt.Printf("Scanning %s for repositories...\n", projectsDir)
 
+	scanStart := time.Now()
 	repoPaths, err := scanner.Scan(projectsDir, scanner.Options{
 		ExcludePatterns: cfg.ExcludePatterns,
 	})
@@ -72,6 +88,7 @@ func (c *ReposCmd) runArchived(globals *CLI) error {
 	if err != nil {
 		return fmt.Errorf("checking archive status: %w", err)
 	}
+	_ = ml.LogPerf(len(repoPaths), int(time.Since(scanStart).Milliseconds()))
 
 	if len(archived) == 0 {
 		fmt.Println("No archived repositories found.")
@@ -134,15 +151,20 @@ func (c *ReposCmd) runArchived(globals *CLI) error {
 		return fmt.Errorf("selection prompt: %w", err)
 	}
 
-	if len(selected) == 0 {
-		fmt.Println("No repositories selected.")
-		return nil
-	}
-
-	// Build a set of selected paths for quick lookup.
+	// Log suggestion events for each archived repo.
 	selectedSet := make(map[string]bool, len(selected))
 	for _, s := range selected {
 		selectedSet[s] = true
+	}
+	for _, r := range removable {
+		accepted := selectedSet[r.Path]
+		fp := repoFingerprint(r.Path)
+		_ = ml.LogSuggestion("delete_archived_repo", fp, accepted, 0)
+	}
+
+	if len(selected) == 0 {
+		fmt.Println("No repositories selected.")
+		return nil
 	}
 
 	removed := 0
@@ -162,4 +184,14 @@ func (c *ReposCmd) runArchived(globals *CLI) error {
 
 	fmt.Printf("\n%s\n", bold.Sprintf("Removed %d archived repositories.", removed))
 	return nil
+}
+
+// repoFingerprint returns a stable fingerprint for a repository using
+// its remote URL when available, falling back to the repo path.
+func repoFingerprint(repoPath string) string {
+	remote, err := git.RemoteURL(repoPath, "origin")
+	if err != nil || remote == "" {
+		remote = repoPath
+	}
+	return metrics.Fingerprint(remote)
 }
