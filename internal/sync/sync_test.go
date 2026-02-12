@@ -13,27 +13,28 @@ import (
 type mockGitOps struct {
 	mu gosync.Mutex
 
-	fetchErr       error
-	isClean        bool
-	isCleanErr     error
-	currentBranch  string
-	currentBrErr   error
-	defaultBranch  string
-	defaultBrErr   error
-	hasRemote      bool
-	pullErr        error
-	isMerged       bool
-	isMergedErr    error
-	checkoutErr    error
-	mergeBase      string
-	mergeBaseErr   error
-	mergeTreeOut   string
-	mergeTreeConfl bool
-	mergeTreeErr   error
-	stashPushErr   error
-	stashPopErr    error
-	rebaseAbortErr error
-	mergeAbortErr  error
+	fetchErr         error
+	isClean          bool
+	isCleanErr       error
+	currentBranch    string
+	currentBrErr     error
+	defaultBranch    string
+	defaultBrErr     error
+	hasRemote        bool
+	pullErr          error
+	isMerged         bool
+	isMergedErr      error
+	checkoutErr      error
+	mergeBase        string
+	mergeBaseErr     error
+	mergeTreeOut     string
+	mergeTreeConfl   bool
+	mergeTreeErr     error
+	stashPushCreated bool
+	stashPushErr     error
+	stashPopErr      error
+	rebaseAbortErr   error
+	mergeAbortErr    error
 
 	// Track calls for verification.
 	fetchCalls       []string
@@ -110,11 +111,11 @@ func (m *mockGitOps) MergeTree(_ string, _, _, _ string) (string, bool, error) {
 	return m.mergeTreeOut, m.mergeTreeConfl, m.mergeTreeErr
 }
 
-func (m *mockGitOps) StashPush(_ string, message string) error {
+func (m *mockGitOps) StashPush(_ string, message string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.stashPushCalls = append(m.stashPushCalls, message)
-	return m.stashPushErr
+	return m.stashPushCreated, m.stashPushErr
 }
 
 func (m *mockGitOps) StashPop(_ string) error {
@@ -140,11 +141,12 @@ func (m *mockGitOps) MergeAbort(_ string) error {
 
 func defaultMock() *mockGitOps {
 	return &mockGitOps{
-		hasRemote:     true,
-		isClean:       true,
-		currentBranch: "main",
-		defaultBranch: "main",
-		mergeBase:     "abc123",
+		hasRemote:        true,
+		isClean:          true,
+		currentBranch:    "main",
+		defaultBranch:    "main",
+		mergeBase:        "abc123",
+		stashPushCreated: true,
 	}
 }
 
@@ -602,5 +604,26 @@ func TestAll_MergedBranchSwitchThenPullFails(t *testing.T) {
 	}
 	if len(mock.checkoutCalls) != 1 {
 		t.Errorf("expected 1 checkout call, got %d", len(mock.checkoutCalls))
+	}
+}
+
+func TestAll_DirtyAutoStashNothingStashed(t *testing.T) {
+	mock := defaultMock()
+	mock.isClean = false
+	mock.mergeTreeConfl = false
+	mock.stashPushCreated = false
+	opts := Options{Strategy: "rebase", AutoStash: true}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Synced {
+		t.Errorf("expected Synced, got %d: %s", r.Status, r.Message)
+	}
+	if len(mock.stashPushCalls) != 1 {
+		t.Error("expected stash push to be called")
+	}
+	if mock.stashPopCalls != 0 {
+		t.Error("should not pop stash when nothing was stashed")
 	}
 }

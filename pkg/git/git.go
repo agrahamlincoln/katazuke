@@ -165,9 +165,21 @@ func Pull(repoPath string, strategy string) error {
 }
 
 // StashPush stashes the current working tree changes with the given message.
-func StashPush(repoPath string, message string) error {
+// It returns true if a stash entry was actually created, false if there was
+// nothing to stash (git stash push exits 0 either way).
+func StashPush(repoPath string, message string) (bool, error) {
+	// Capture the stash ref before pushing so we can detect whether a new
+	// entry was created. This avoids parsing porcelain output which varies
+	// by locale.
+	beforeRef, _ := run(repoPath, "rev-parse", "--quiet", "--verify", "refs/stash")
+
 	_, err := run(repoPath, "stash", "push", "-m", message)
-	return err
+	if err != nil {
+		return false, err
+	}
+
+	afterRef, _ := run(repoPath, "rev-parse", "--quiet", "--verify", "refs/stash")
+	return afterRef != beforeRef, nil
 }
 
 // StashPop applies and removes the most recent stash entry.

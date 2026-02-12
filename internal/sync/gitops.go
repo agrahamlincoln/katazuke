@@ -56,7 +56,8 @@ func (RealGitOps) MergeTree(repoPath string, base, local, remote string) (string
 }
 
 // StashPush stashes working tree changes with the given message.
-func (RealGitOps) StashPush(repoPath string, message string) error {
+// It returns true if a stash entry was actually created.
+func (RealGitOps) StashPush(repoPath string, message string) (bool, error) {
 	return git.StashPush(repoPath, message)
 }
 

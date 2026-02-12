@@ -55,7 +55,7 @@ type GitOps interface {
 	Checkout(repoPath, branch string) error
 	MergeBase(repoPath string, ref1, ref2 string) (string, error)
 	MergeTree(repoPath string, base, local, remote string) (string, bool, error)
-	StashPush(repoPath string, message string) error
+	StashPush(repoPath string, message string) (bool, error)
 	StashPop(repoPath string) error
 	RebaseAbort(repoPath string) error
 	MergeAbort(repoPath string) error
@@ -273,12 +273,13 @@ func syncDirty(repoPath, repoName, defaultBranch string, opts Options, git GitOp
 	}
 
 	// Stash, pull, pop.
-	slog.Debug("stashing changes", "repo", repoName)
-	if err := git.StashPush(repoPath, "katazuke: auto-stash before sync"); err != nil {
+	stashed, err := git.StashPush(repoPath, "katazuke: auto-stash before sync")
+	if err != nil {
 		result.Status = Failed
 		result.Message = fmt.Sprintf("stash push failed: %v", err)
 		return result
 	}
+	slog.Debug("stash push completed", "repo", repoName, "created", stashed)
 
 	slog.Debug("pulling with stash", "repo", repoName, "strategy", opts.Strategy)
 	if err := git.Pull(repoPath, opts.Strategy); err != nil {
@@ -290,11 +291,13 @@ func syncDirty(repoPath, repoName, defaultBranch string, opts Options, git GitOp
 		return result
 	}
 
-	slog.Debug("popping stash", "repo", repoName)
-	if err := git.StashPop(repoPath); err != nil {
-		result.Status = Failed
-		result.Message = fmt.Sprintf("stash pop failed (stash preserved): %v", err)
-		return result
+	if stashed {
+		slog.Debug("popping stash", "repo", repoName)
+		if err := git.StashPop(repoPath); err != nil {
+			result.Status = Failed
+			result.Message = fmt.Sprintf("stash pop failed (stash preserved): %v", err)
+			return result
+		}
 	}
 
 	result.Status = Synced

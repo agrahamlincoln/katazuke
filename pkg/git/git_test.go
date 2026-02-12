@@ -305,9 +305,12 @@ func TestStashPushPop(t *testing.T) {
 	repo.AddFile("wip.txt")
 
 	// Stash the change.
-	err := git.StashPush(repo.Path, "test stash")
+	created, err := git.StashPush(repo.Path, "test stash")
 	if err != nil {
 		t.Fatalf("StashPush error: %v", err)
+	}
+	if !created {
+		t.Error("expected StashPush to report stash was created")
 	}
 
 	// Working tree should be clean after stash.
@@ -332,6 +335,24 @@ func TestStashPushPop(t *testing.T) {
 	}
 	if clean {
 		t.Error("expected dirty working tree after stash pop")
+	}
+}
+
+func TestStashPush_NothingToStash(t *testing.T) {
+	repo := helpers.NewTestRepo(t, "stash-noop")
+
+	// Repo is already clean -- stash push should report nothing created.
+	created, err := git.StashPush(repo.Path, "should be noop")
+	if err != nil {
+		t.Fatalf("StashPush error: %v", err)
+	}
+	if created {
+		t.Error("expected StashPush to report nothing was stashed on a clean repo")
+	}
+
+	// Verify stash stack is empty (pop should fail).
+	if err := git.StashPop(repo.Path); err == nil {
+		t.Error("expected StashPop to fail on empty stash stack")
 	}
 }
 
