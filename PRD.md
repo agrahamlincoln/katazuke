@@ -98,21 +98,26 @@
 2. Tool scans all repositories in `~/projects`
 3. For each repository:
    - Checks if on main/master branch
-   - Checks for uncommitted changes
-   - If clean: `git checkout main && git pull`
-   - If dirty: offers to stash, pull, and pop stash
-   - If conflicts: skips and reports
+   - Runs `git fetch` (always safe)
+   - Checks for uncommitted changes (`git status --porcelain`)
+   - **If clean**: `git pull --rebase` (or configured strategy)
+   - **If dirty**:
+     - Use `git merge-tree` to simulate merge and detect conflicts
+     - If simulation shows conflicts → skip and report
+     - If simulation is clean → `git stash && git pull --rebase && git stash pop`
+     - If stash pop fails → `git stash pop --abort` and restore original state, skip and report
 4. Provides summary of:
    - Successfully updated repos
    - Skipped repos (with reasons)
-   - Repos with conflicts needing attention
+   - Repos needing manual attention
 
 **Success Criteria**:
 - Never loses uncommitted work
-- Handles stash operations correctly
-- Detects and reports merge conflicts
+- Never leaves repos in conflicted state
+- Uses `git merge-tree` to detect conflicts before attempting stash/pop
 - Runs efficiently (parallel operations where possible)
 - Supports selective sync (by repo pattern)
+- Configurable sync strategy (rebase, merge, ff-only)
 
 ### 5. Finding Stale/Abandoned Branches
 
@@ -121,7 +126,8 @@
 **Workflow**:
 1. User runs `katazuke branches --stale`
 2. Tool scans all repositories for branches that:
-   - Haven't been committed to in X days (configurable, default 60)
+   - Haven't been committed to in 30 days (configurable via `stale_threshold_days`)
+   - "Touched" means last commit date on the branch (local or remote)
    - Exist both locally and remotely
    - Are not merged
    - Are not main/master/develop
@@ -138,7 +144,7 @@
 5. Tool executes actions with confirmation
 
 **Success Criteria**:
-- Configurable staleness threshold
+- Configurable staleness threshold (default: 30 days)
 - Never deletes branches with unpushed commits
 - Provides easy way to resume work
 - Supports archiving branches as tags
@@ -194,7 +200,7 @@ Support configuration via:
 **Configuration Options**:
 ```yaml
 projects_dir: ~/projects
-stale_threshold_days: 60
+stale_threshold_days: 30  # Branch considered stale if no commits in N days
 github_token: ghp_xxx  # Optional, for higher API limits
 exclude_patterns:
   - ".archive"
@@ -205,14 +211,213 @@ prompts:
 backup:
   enabled: true
   location: ~/katazuke-backups
+sync:
+  strategy: rebase  # 'rebase', 'merge', or 'ff-only'
+  skip_dirty: true  # Skip repos with uncommitted changes
 ```
+
+### Directory Structure Support
+
+**Default Behavior**: Scan `~/projects` as a flat directory structure
+- If no `.katazuke` file exists, assume each immediate child is a git repository
+- Fast, single-level scan with no recursion
+- This handles the common case without any configuration
+
+**Configurable Root Path**:
+- Support alternate paths via config: `projects_dir: /path/to/repos`
+- Expand `~` to user home directory
+- Validate path exists and is readable
+
+**`.katazuke` Index File as Boundary Marker**:
+- **Purpose**: Marks a directory as organizing repositories/groups (not a repository itself)
+- **Location**: Can exist at any level in the hierarchy
+- **Self-documenting structure**: Presence indicates "scan my subdirectories," absence means "my children are repos"
+
+**Index File Format**:
+
+Strict schema supporting only two fields. Written in YAML (JSON also supported as YAML superset):
+
+```yaml
+groups:
+  - work
+  - oss
+  - experiments
+ignores:
+  - archive
+  - tmp
+  - old-projects
+```
+
+**Fields**:
+- `groups`: List of subdirectories that contain repositories or nested `.katazuke` files (optional, defaults to empty list)
+- `ignores`: List of subdirectories to skip during scanning (optional, defaults to empty list)
+
+**Schema Validation**:
+- Only `groups` and `ignores` fields are allowed
+- Both fields must be lists of strings
+- Unknown fields are rejected with error
+- Empty file or missing fields treated as empty lists
+
+**Example Hierarchies**:
+
+*Flat structure (no `.katazuke` needed)*:
+```
+~/projects/
+├── repo1/
+├── repo2/
+└── repo3/
+```
+
+*Single-level grouping with ignores*:
+```
+~/projects/
+├── .katazuke          # groups: [work, oss, personal]
+│                      # ignores: [archive, tmp]
+├── work/
+│   ├── repo1/
+│   └── repo2/
+├── oss/
+│   └── project1/
+├── personal/
+│   └── experiment/
+├── archive/           # Ignored
+└── tmp/               # Ignored
+```
+
+*Nested grouping (unlimited depth)*:
+```
+~/projects/
+├── .katazuke          # groups: [work, oss]
+├── work/
+│   ├── .katazuke      # groups: [client-a, client-b]
+│   │                  # ignores: [deprecated]
+│   ├── client-a/
+│   │   ├── .katazuke  # groups: [frontend, backend]
+│   │   ├── frontend/
+│   │   │   ├── repo1/
+│   │   │   └── repo2/
+│   │   └── backend/
+│   │       └── api/
+│   ├── client-b/
+│   │   └── project/
+│   └── deprecated/    # Ignored
+└── oss/
+    ├── lib1/
+    └── lib2/
+```
+
+**Scan Algorithm**:
+1. Start at `projects_dir` (e.g., `~/projects`)
+2. Look for `.katazuke` index file in current directory
+3. **If `.katazuke` exists**:
+   - Parse YAML/JSON and validate schema (only `groups` and `ignores` allowed)
+   - Read `groups` list (default: empty)
+   - Read `ignores` list (default: empty)
+   - For each group directory:
+     - Skip if in `ignores` list
+     - Recursively descend and repeat from step 2
+   - Scan non-group, non-ignored directories at this level as repositories
+4. **If `.katazuke` does NOT exist**:
+   - Assume all immediate child directories are repositories (respecting global `exclude_patterns`)
+   - Stop recursion (don't scan deeper)
+5. For each discovered repository, perform requested operations
+
+**Initial Setup / Discovery**:
+- If user runs `katazuke` in a directory without `.katazuke`:
+  - Assume flat structure (children are repos)
+- If user wants grouping:
+  - Run `katazuke init` to create `.katazuke` interactively
+  - Tool scans subdirectories and asks which are "groups" vs "repos" vs "ignored"
+  - Generates `.katazuke` file(s) accordingly in YAML format
+- User can manually create/edit `.katazuke` files in YAML or JSON
+
+**Defensive Behavior**:
+- If `.katazuke` contains unknown fields → reject with error message
+- If `.katazuke` lists a group that doesn't exist → warn and skip
+- If directory listed in both `groups` and `ignores` → ignore takes precedence, warn user
+- If directory is in global `exclude_patterns` → skip entirely
+- If directory is hidden (starts with `.`) → skip (except `.git`)
+- Detect cycles (e.g., symlinks) and warn/skip
+
+**Safety**:
+- No arbitrary depth limits needed (`.katazuke` provides natural boundaries)
+- Skip directories matching global `exclude_patterns`
+- Skip directories in local `ignores` lists
+- Ignore hidden directories (except `.git`)
+- Track visited paths to prevent infinite loops from symlinks
+
+### Git Authentication
+
+- **No custom authentication handling**: Shell out to git commands and rely on user's existing git configuration
+- User must have git properly configured (SSH keys, credential helpers, etc.)
+- Private and public repositories are handled identically—git handles auth transparently
+- If user needs to enter credentials manually, the tool will work but be tedious (user's problem to fix)
+
+### Sync Strategy (Safe Conflict Detection)
+
+**Goal**: Update repositories without leaving them in a conflicted or broken state.
+
+**Algorithm**:
+1. **Always fetch first**: `git fetch` is safe and never modifies working tree
+2. **Check working tree status**: `git status --porcelain`
+3. **For clean repos** (no uncommitted changes):
+   - Execute configured strategy: `git pull --rebase` (or `--ff-only`, or merge)
+   - If pull fails, report error and leave repo unchanged
+4. **For dirty repos** (uncommitted changes):
+   - **Simulate merge** using `git merge-tree`:
+     ```bash
+     git merge-tree $(git merge-base HEAD origin/main) HEAD origin/main
+     ```
+   - If merge-tree output shows conflicts → skip repo and report
+   - If merge-tree shows clean merge → safe to proceed:
+     ```bash
+     git stash push -m "katazuke auto-stash" &&
+     git pull --rebase &&
+     git stash pop
+     ```
+   - If `git stash pop` fails:
+     ```bash
+     git stash pop --abort  # or reset stash
+     git pull --abort       # undo the pull
+     ```
+     Report failure and skip repo (original state restored)
+
+**Configuration**:
+```yaml
+sync:
+  strategy: rebase          # 'rebase', 'merge', or 'ff-only'
+  skip_dirty: false         # If true, skip dirty repos without merge-tree check
+  auto_stash: true          # If true, attempt stash/pop for dirty repos
+```
+
+**Safety guarantees**:
+- Never lose uncommitted work
+- Never leave repo in conflicted state
+- Always report what happened (success, skipped, or failed)
+- Provide undo/rollback if operation fails midway
 
 ### GitHub API Integration
 
-- Support both personal access tokens and GitHub CLI auth
-- Graceful degradation if GitHub unavailable
-- Respect rate limits
-- Cache API responses appropriately
+**Client**: Use official Go GitHub client library (`github.com/google/go-github/v58`)
+- No dependency on `gh` CLI being installed
+- Better type safety and error handling
+- Direct control over API requests
+
+**Authentication** (in order of precedence):
+1. Personal access token from config file (`github_token`)
+2. Environment variable (`GITHUB_TOKEN` or `GH_TOKEN`)
+3. Unauthenticated (lower rate limits, public repos only)
+
+**Features**:
+- Graceful degradation if GitHub unavailable or unauthenticated
+- Respect rate limits (check remaining, pause if needed)
+- Cache API responses appropriately (e.g., archive status TTL: 1 hour)
+- GitHub token only needed for API calls (checking archived status, etc.), not git operations
+
+**API Operations**:
+- Check if repository is archived
+- Get repository metadata (last push date, default branch)
+- Optionally: check PR status for merged branches
 
 ### Safety Features
 
@@ -250,33 +455,238 @@ backup:
 
 ## Success Metrics
 
-- **Time Saved**: Average time saved per week on manual git maintenance
-- **Disk Space Recovered**: Total space freed by cleanup operations
-- **Error Prevention**: Incidents avoided (accidental work on stale branches, etc.)
-- **Adoption**: Active users, repeat usage rate
-- **Safety**: Zero reported cases of accidental data loss
+### Philosophy: Actionable Metrics Only
+
+**Core Principle**: We only track metrics that directly inform improvements to katazuke.
+
+**The Actionability Test**: Before adding a metric, ask:
+> "If this metric shows an unexpected pattern, what specific change would we make to katazuke?"
+
+If the answer is unclear or "it's just interesting," don't track it.
+
+**Why This Matters**:
+- Prevents data hoarding (storing GB of unused JSON)
+- Keeps implementation focused and simple
+- Every metric has a purpose and drives decisions
+
+### Metrics We Track (and Why)
+
+#### 1. **Acceptance Rate by Action Type**
+**Tracks**: Suggestions shown vs accepted, per action type (delete_merged_branch, delete_stale_branch, etc.)
+
+**Action**: If acceptance <50% → detection logic is broken OR need "never suggest this" option
+
+**Value**: Identifies which features work and which are just noise
+
+#### 2. **Repeat Offenders**
+**Tracks**: Items suggested multiple times without being accepted
+
+**Action**: After 3+ suggestions → auto-add to ignore list OR improve detection logic
+
+**Value**: Automatically identifies false positives
+
+#### 3. **Command Usage Frequency**
+**Tracks**: Which commands and flags are used
+
+**Action**: Remove unused commands, prioritize development on popular features
+
+**Value**: Guides where to invest development time
+
+#### 4. **Performance Metrics**
+**Tracks**: Scan duration, repos scanned, slow operations
+
+**Action**: Optimize slow operations, warn users if performance degrades
+
+**Value**: Keeps tool fast as repos/branches grow
+
+#### 5. **Age Distribution**
+**Tracks**: Age of items when accepted vs declined (for stale detection)
+
+**Action**: If avg_accepted >> threshold → threshold is too conservative, auto-tune defaults
+
+**Value**: Tune thresholds based on real usage patterns
+
+#### 6. **Impact Counters** (motivational only)
+**Tracks**: Branches deleted, disk freed, repos removed
+
+**Action**: None - purely motivational ("freed 5GB this year!")
+
+**Value**: Shows tangible value, encourages continued use
+
+### Metrics We DON'T Track (and Why)
+
+- **Dry-run vs Real-run Ratio**: Hard to interpret - low trust or just cautious users? No clear action.
+- **Session Interruptions**: Don't know why (found nothing vs too annoying). Ambiguous signal.
+- **Decision Time**: Interesting but unclear action (shorter prompts? more detail? context-dependent).
+- **Workspace Health Score**: Cool gamification but doesn't tell us what to fix.
+- **Time Saved**: Cannot quantify - how long would manual cleanup take? Unknowable.
+- **Safety**: Users won't report tool errors; absence of complaints ≠ safety.
+
+### Implementation
+
+**Storage Location**: `~/.local/share/katazuke/metrics/`
+- Event log files: `events-YYYY-MM.jsonl` (one file per month, JSONL format)
+- Schema version tracked in each event for future compatibility
+- **Storage cost**: ~200 bytes/event, ~730KB/year (10 suggestions/day) - negligible
+
+**Minimal Event Schema** (v1):
+```json
+{
+  "schema_version": 1,
+  "timestamp": "2026-02-12T01:00:00Z",
+  "session_id": "uuid",
+
+  "suggestion": {
+    "action_type": "delete_merged_branch",
+    "item_fingerprint": "sha256-hash",
+    "accepted": true
+  },
+
+  "command": {
+    "name": "branches",
+    "flags": ["--merged", "--dry-run"]
+  },
+
+  "perf": {
+    "repos_scanned": 50,
+    "scan_duration_ms": 4200
+  },
+
+  "age_days": 45,
+
+  "impact": {
+    "disk_freed_bytes": 102400
+  }
+}
+```
+
+**Privacy**: All metrics stay local, never transmitted anywhere.
+
+### Future Analytics
+
+With versioned event logs, we can later build:
+- `katazuke stats` - Show personal cleanup statistics
+- `katazuke tune` - Auto-adjust thresholds based on acceptance patterns
+- Charts/graphs of cleanup activity over time
+
+All analytics remain **local-only** and **optional**.
 
 ## Future Enhancements (Post-MVP)
 
-- GitLab/Bitbucket support
-- Web dashboard for workspace statistics
-- Integration with git hooks for automatic cleanup
-- Team/organization shared configurations
-- Machine learning for smarter staleness detection
-- Plugin system for custom cleanup rules
-- Integration with backup tools (Time Machine, restic)
+**Worth Exploring**:
+- **Plugin system for custom cleanup rules**: Consider whether base cleanup rules should be implemented as plugins or declarative configuration. This might benefit the core functionality itself and allow extensibility without bloat.
+
+**Out of Scope**:
+- GitLab/Bitbucket support (not aligned with core workflow)
+- Web dashboard (unnecessary complexity)
+- Git hooks integration (wrong level of automation)
+- Team/organization shared configurations (personal tool)
+- ML-based staleness detection (over-engineering)
+- Backup tool integration (separate concern)
 
 ## Open Questions
 
-1. Should we support nested git repositories (submodules, mono repos)?
-2. How should we handle private repositories vs public?
-3. Should sync operation support rebasing instead of pulling?
-4. What's the right default for stale threshold (30, 60, 90 days)?
-5. Should we integrate with GitHub CLI (`gh`) or use API directly?
+(None currently - all design decisions have been made!)
+
+## Developer Environment
+
+**Philosophy**: Establish excellent DX before building core features.
+
+### Testing Infrastructure
+
+**E2E Tests**:
+- Automated git repository scenario creation
+- Tests should simulate real user workflows (create branches, merge PRs, etc.)
+- Use built binary (debug mode) to perform cleanup operations
+- Validate expected outcomes
+- **Date simulation**: Use git commit timestamp manipulation to test stale detection without waiting 30 days
+  - `GIT_COMMITTER_DATE` and `GIT_AUTHOR_DATE` environment variables
+  - Or `git commit --date` flag to backdate commits
+
+**Unit Tests**:
+- Standard Go testing patterns
+- Table-driven tests for complex logic
+- Mocks for GitHub API interactions
+- Coverage reporting
+
+### Build Tooling
+
+**Justfile** (common developer tasks):
+- `just lint` - Run golangci-lint
+- `just build` - Build binary for local platform
+- `just test` - Run unit tests
+- `just test-e2e` - Run end-to-end tests
+- `just package-homebrew` - Build Homebrew package
+- `just package-aur` - Build AUR package
+- `just release VERSION` - Bump version, tag, build release artifacts
+- `just install` - Install binary locally for testing
+
+### Packaging
+
+**Repository Structure**:
+- **Main repo** (`agrahamlincoln/katazuke`): Source code only
+- **Homebrew tap** (`agrahamlincoln/homebrew-katazuke`): Homebrew formula (follows Homebrew tap conventions)
+- **AUR package** (`agrahamlincoln/aur-katazuke`): PKGBUILD for Arch Linux
+
+**Homebrew**:
+- Separate `homebrew-katazuke` repository (Homebrew convention)
+- Install: `brew tap agrahamlincoln/katazuke && brew install katazuke`
+- Formula automatically updated by release script
+
+**AUR**:
+- Separate `aur-katazuke` repository
+- **Not published to aur.archlinux.org** (personal use only)
+- Install: `paru -S https://github.com/agrahamlincoln/aur-katazuke.git`
+- Or: `git clone https://github.com/agrahamlincoln/aur-katazuke.git && cd aur-katazuke && makepkg -si`
+- PKGBUILD automatically updated by release script
+
+**Benefits of Separate Repos**:
+- Clean separation: main repo = code, packaging repos = distribution
+- Follows ecosystem conventions (Homebrew tap pattern, AUR pattern)
+- No chicken-and-egg problems with checksums
+- Packaging updates don't clutter main repo history
+
+### CI/CD
+
+**No automated CI initially**:
+- No GitHub Actions workflows
+- Manual release process via justfile commands
+- Scripts that mimic CI tasks (build, test, package)
+- Can be triggered manually: `just release 0.1.0`
+
+### Minimal Viable Binary
+
+**Before core features, implement**:
+1. Basic CLI structure (cobra)
+2. Help text (`katazuke --help`)
+3. Version command (`katazuke version`)
+4. Stub commands for planned features
+5. Set up packaging repositories (`homebrew-katazuke`, `aur-katazuke`)
+6. Successful packaging for Homebrew and AUR
+7. Installation and execution on both macOS and Linux
+
+**Goal**: Prove the packaging and distribution works before investing in features.
+
+### Release Automation
+
+**Fully automated release process** via `just release VERSION`:
+1. Build binaries for all platforms (darwin-arm64, linux-amd64)
+2. Create release tarballs
+3. Calculate SHA256 checksums
+4. Update Homebrew formula in `../homebrew-katazuke` repo
+5. Commit, tag, and push main repo
+6. Create GitHub release with binary tarballs
+7. Download GitHub-generated source tarball
+8. Calculate source tarball SHA256
+9. Update PKGBUILD in `../aur-katazuke` repo
+10. Commit and push both packaging repos
+
+**No manual steps required** - developer only runs `just release 0.2.0`
 
 ## Timeline (Proposed)
 
+- **Phase 0** (Foundation): Developer environment, testing infrastructure, packaging
 - **Phase 1** (MVP): Branch cleanup + archived repo detection
 - **Phase 2**: Sync automation + non-git directory detection
 - **Phase 3**: Stale branch detection + configuration system
-- **Phase 4**: Polish, testing, packaging (Homebrew + AUR)
+- **Phase 4**: Polish, documentation

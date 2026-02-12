@@ -6,10 +6,10 @@ Thanks for your interest in contributing to katazuke! This document provides gui
 
 ### Prerequisites
 
-- Go 1.21 or later
+- Go 1.25 or later
 - Git
-- Make
-- golangci-lint (optional, for linting)
+- [just](https://github.com/casey/just) - Task runner
+- golangci-lint
 
 ### Getting Started
 
@@ -18,17 +18,17 @@ Thanks for your interest in contributing to katazuke! This document provides gui
 git clone https://github.com/agrahamlincoln/katazuke.git
 cd katazuke
 
-# Install dependencies
-make deps
+# Setup development environment (checks tools, installs dependencies)
+just setup
 
 # Build the binary
-make build
+just build
 
 # Run tests
-make test
+just test
 
-# Run linter (requires golangci-lint)
-make lint
+# Run linter
+just lint
 ```
 
 ## Project Structure
@@ -100,8 +100,8 @@ go test -race ./...
 ## Building for Distribution
 
 ```bash
-# Build for all platforms
-make build-all
+# Build for all platforms (darwin-arm64, linux-amd64)
+just build-all
 
 # Binaries will be in dist/
 ls -lh dist/
@@ -109,14 +109,20 @@ ls -lh dist/
 
 ## Release Process
 
-1. Update version in relevant files
-2. Update CHANGELOG.md
-3. Create and push a git tag: `git tag -a v0.1.0 -m "Release v0.1.0"`
-4. Push tag: `git push origin v0.1.0`
-5. GitHub Actions will build and create release
-6. Update Homebrew formula
-7. Update AUR package
+Releases are fully automated using the justfile:
 
-## Questions?
+```bash
+# Create and publish a release
+just release 0.1.0
+```
 
-Feel free to open an issue for any questions or concerns!
+This will automatically:
+1. Build binaries for all platforms
+2. Create release tarballs
+3. Calculate SHA256 checksums
+4. Update `homebrew/katazuke.rb` with new version and SHA256s
+5. Update `aur/PKGBUILD` with new version
+6. Commit the formula updates
+7. Create git tag `v0.1.0`
+8. Push commits and tag to origin
+9. Create GitHub release with all assets (requires `gh` CLI)
