@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/agrahamlincoln/katazuke/internal/merge"
 	"github.com/agrahamlincoln/katazuke/internal/parallel"
 	"github.com/agrahamlincoln/katazuke/pkg/git"
 )
@@ -24,8 +25,9 @@ type MergedBranch struct {
 // FindMerged scans the given repositories and returns branches that have been
 // merged into each repo's default branch. The current branch and the default
 // branch itself are excluded from results. Work is parallelized across the
-// given number of workers.
-func FindMerged(repos []string, workers int, onProgress func(completed, total int)) ([]MergedBranch, error) {
+// given number of workers. The detector combines local git checks with
+// GitHub API lookups to catch squash-merges.
+func FindMerged(repos []string, detector *merge.Detector, workers int, onProgress func(completed, total int)) ([]MergedBranch, error) {
 	var resultCb func(int, int, []MergedBranch)
 	if onProgress != nil {
 		resultCb = func(completed, total int, _ []MergedBranch) {
@@ -33,7 +35,9 @@ func FindMerged(repos []string, workers int, onProgress func(completed, total in
 		}
 	}
 
-	repoResults := parallel.Run(repos, workers, findMergedInRepo, resultCb)
+	repoResults := parallel.Run(repos, workers, func(repoPath string) []MergedBranch {
+		return findMergedInRepo(repoPath, detector)
+	}, resultCb)
 
 	results := make([]MergedBranch, 0, len(repoResults))
 	for _, rr := range repoResults {
@@ -42,7 +46,7 @@ func FindMerged(repos []string, workers int, onProgress func(completed, total in
 	return results, nil
 }
 
-func findMergedInRepo(repoPath string) []MergedBranch {
+func findMergedInRepo(repoPath string, detector *merge.Detector) []MergedBranch {
 	repoName := filepath.Base(repoPath)
 
 	defaultBranch, err := git.DefaultBranch(repoPath)
@@ -63,13 +67,32 @@ func findMergedInRepo(repoPath string) []MergedBranch {
 		slog.Debug("repo has detached HEAD, no branch to exclude", "repo", repoName)
 	}
 
-	merged, err := git.MergedBranches(repoPath, defaultBranch)
+	allBranches, err := git.ListBranches(repoPath)
+	if err != nil {
+		slog.Warn("skipping repo: could not list branches",
+			"repo", repoName, "error", err)
+		return nil
+	}
+
+	// Filter out default and current branches before passing to the detector
+	// to avoid unnecessary API calls for branches we'd discard anyway.
+	candidates := make([]string, 0, len(allBranches))
+	for _, b := range allBranches {
+		if b != defaultBranch && b != currentBranch {
+			candidates = append(candidates, b)
+		}
+	}
+
+	merged, err := detector.MergedBranches(repoPath, defaultBranch, candidates)
 	if err != nil {
 		slog.Warn("skipping repo: could not list merged branches",
 			"repo", repoName, "error", err)
 		return nil
 	}
 
+	// The detector's git-merged set can include default/current
+	// branches since git branch --merged is not filtered by the
+	// candidates list. Exclude them here as a safety net.
 	var results []MergedBranch
 	for _, branch := range merged {
 		if branch == defaultBranch || branch == currentBranch {

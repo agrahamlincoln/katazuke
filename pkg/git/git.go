@@ -141,6 +141,11 @@ func DeleteRemoteBranch(repoPath, remote, branch string) error {
 	return err
 }
 
+// RevParse returns the full SHA of the given ref.
+func RevParse(repoPath, ref string) (string, error) {
+	return run(repoPath, "rev-parse", "--verify", ref)
+}
+
 // CommitDate returns the author date of the latest commit on the given branch.
 func CommitDate(repoPath, branch string) (time.Time, error) {
 	out, err := run(repoPath, "log", "-1", "--format=%aI", branch)

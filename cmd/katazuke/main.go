@@ -15,6 +15,7 @@ import (
 	"github.com/agrahamlincoln/katazuke/internal/branches"
 	"github.com/agrahamlincoln/katazuke/internal/config"
 	ghclient "github.com/agrahamlincoln/katazuke/internal/github"
+	"github.com/agrahamlincoln/katazuke/internal/merge"
 	"github.com/agrahamlincoln/katazuke/internal/metrics"
 	"github.com/agrahamlincoln/katazuke/internal/parallel"
 	"github.com/agrahamlincoln/katazuke/internal/scanner"
@@ -110,7 +111,9 @@ func (c *BranchesCmd) runMerged(globals *CLI) error {
 	slog.Debug("using worker pool", "workers", workers)
 	fmt.Printf("Scanning %d repositories for merged branches...\n", len(repos))
 
-	merged, err := branches.FindMerged(repos, workers, progressPrinter())
+	gh := ghclient.NewClient(cfg.GithubToken)
+	detector := merge.NewDetector(merge.RealGitChecker{}, gh)
+	merged, err := branches.FindMerged(repos, detector, workers, progressPrinter())
 	if err != nil {
 		return fmt.Errorf("finding merged branches: %w", err)
 	}
@@ -230,39 +233,79 @@ func promptForRemoteDeletion(selected []branches.MergedBranch) (bool, error) {
 	return deleteRemote, nil
 }
 
-func deleteSelectedBranches(selected []branches.MergedBranch, deleteRemote bool) error {
+// branchToDelete holds the common fields needed to delete any branch,
+// regardless of whether it came from the merged or stale workflow.
+type branchToDelete struct {
+	repoPath  string
+	repoName  string
+	branch    string
+	hasRemote bool
+	// canDeleteRemote is false for automation branches and branches
+	// with other contributors, preventing remote deletion even when
+	// the user opts in.
+	canDeleteRemote bool
+	label           string
+}
+
+// deleteBranches deletes branches locally and optionally their remote
+// counterparts. forceLocal controls whether git branch -D (force) is used.
+func deleteBranches(toDelete []branchToDelete, deleteRemote, forceLocal bool) error {
+	bold := color.New(color.Bold)
+	green := color.New(color.FgGreen)
+	yellow := color.New(color.FgYellow)
+	red := color.New(color.FgRed)
+	dim := color.New(color.FgHiBlack)
+
 	var failed []string
 	var remoteFailed []string
+	total := len(toDelete)
 
-	for _, m := range selected {
-		slog.Debug("deleting branch", "repo", m.RepoName, "branch", m.Branch)
-		if err := git.DeleteLocalBranch(m.RepoPath, m.Branch, false); err != nil {
-			fmt.Printf("  failed to delete %s in %s: %v\n", m.Branch, m.RepoName, err)
-			failed = append(failed, m.Label())
+	for i, b := range toDelete {
+		completed := i + 1
+		remaining := total - completed
+
+		fmt.Print(clearLine)
+
+		slog.Debug("deleting branch", "repo", b.repoName, "branch", b.branch)
+		if err := git.DeleteLocalBranch(b.repoPath, b.branch, forceLocal); err != nil {
+			fmt.Printf("  %s %s: %s (%v)\n", red.Sprint("[fail]"), b.repoName, b.branch, err)
+			failed = append(failed, b.label)
+			if remaining > 0 {
+				fmt.Printf("%s  %s %d remaining...", clearLine, dim.Sprintf("[%d/%d]", completed, total), remaining)
+			}
 			continue
 		}
-		fmt.Printf("  deleted %s in %s\n", m.Branch, m.RepoName)
+		fmt.Printf("  %s %s: %s\n", green.Sprint("[deleted]"), b.repoName, b.branch)
 
-		if deleteRemote && m.HasRemote {
-			if err := git.DeleteRemoteBranch(m.RepoPath, "origin", m.Branch); err != nil {
-				fmt.Printf("  failed to delete remote %s in %s: %v\n", m.Branch, m.RepoName, err)
-				remoteFailed = append(remoteFailed, m.Label())
-				continue
+		if deleteRemote && b.hasRemote && b.canDeleteRemote {
+			if err := git.DeleteRemoteBranch(b.repoPath, "origin", b.branch); err != nil {
+				if isRemoteRefNotFound(err) {
+					fmt.Printf("  %s %s: %s (remote already deleted)\n", yellow.Sprint("[skip]"), b.repoName, b.branch)
+				} else {
+					fmt.Printf("  %s %s: %s remote (%v)\n", red.Sprint("[fail]"), b.repoName, b.branch, err)
+					remoteFailed = append(remoteFailed, b.label)
+				}
+			} else {
+				fmt.Printf("  %s %s: %s (remote)\n", green.Sprint("[deleted]"), b.repoName, b.branch)
 			}
-			fmt.Printf("  deleted remote %s in %s\n", m.Branch, m.RepoName)
+		}
+
+		if remaining > 0 {
+			fmt.Printf("%s  %s %d remaining...", clearLine, dim.Sprintf("[%d/%d]", completed, total), remaining)
 		}
 	}
 
+	fmt.Print(clearLine)
+
 	fmt.Println()
-	bold := color.New(color.Bold)
-	deleted := len(selected) - len(failed)
+	deleted := len(toDelete) - len(failed)
 	if deleted > 0 {
-		fmt.Println(bold.Sprintf("Deleted %d local branch(es).", deleted))
+		fmt.Println(bold.Sprintf("Deleted %d branch(es).", deleted))
 	}
 	if deleteRemote {
 		remoteCount := 0
-		for _, m := range selected {
-			if m.HasRemote {
+		for _, b := range toDelete {
+			if b.hasRemote && b.canDeleteRemote {
 				remoteCount++
 			}
 		}
@@ -278,6 +321,21 @@ func deleteSelectedBranches(selected []branches.MergedBranch, deleteRemote bool)
 			len(failed), strings.Join(failed, ", "))
 	}
 	return nil
+}
+
+func deleteSelectedBranches(selected []branches.MergedBranch, deleteRemote bool) error {
+	toDelete := make([]branchToDelete, len(selected))
+	for i, m := range selected {
+		toDelete[i] = branchToDelete{
+			repoPath:        m.RepoPath,
+			repoName:        m.RepoName,
+			branch:          m.Branch,
+			hasRemote:       m.HasRemote,
+			canDeleteRemote: true,
+			label:           m.Label(),
+		}
+	}
+	return deleteBranches(toDelete, deleteRemote, false)
 }
 
 func (c *BranchesCmd) runStale(globals *CLI) error {
@@ -327,15 +385,17 @@ func (c *BranchesCmd) runStale(globals *CLI) error {
 	slog.Debug("using worker pool", "workers", workers)
 	fmt.Printf("Scanning %d repositories for stale branches...\n", len(repos))
 
+	gh := ghclient.NewClient(cfg.GithubToken)
+	detector := merge.NewDetector(merge.RealGitChecker{}, gh)
+
 	threshold := time.Duration(staleDays) * 24 * time.Hour
-	stale, err := branches.FindStale(repos, threshold, workers, progressPrinter())
+	stale, err := branches.FindStale(repos, threshold, detector, workers, progressPrinter())
 	if err != nil {
 		return fmt.Errorf("finding stale branches: %w", err)
 	}
 	_ = ml.LogPerf(len(repos), int(time.Since(scanStart).Milliseconds()))
 
 	// Filter out branches with open PRs using GitHub API.
-	gh := ghclient.NewClient(cfg.GithubToken)
 	stale = filterByPRStatus(stale, gh, workers)
 
 	if len(stale) == 0 {
@@ -383,17 +443,27 @@ func filterByPRStatus(stale []branches.StaleBranch, gh *ghclient.Client, workers
 			return prCheckResult{branch: s}
 		}
 
-		prState, err := gh.BranchPRState(owner, repo, s.Branch)
+		info, err := gh.BranchPRInfo(owner, repo, s.Branch)
 		if err != nil {
 			slog.Debug("could not check PR status, keeping branch in results",
 				"repo", s.RepoName, "branch", s.Branch, "error", err)
 			return prCheckResult{branch: s}
 		}
 
-		if prState == ghclient.PRStateOpen {
+		if info.State == ghclient.PRStateOpen {
 			slog.Debug("excluding branch with open PR",
 				"repo", s.RepoName, "branch", s.Branch)
 			return prCheckResult{branch: s, exclude: true}
+		}
+
+		if info.State == ghclient.PRStateMerged {
+			// Verify local branch tip matches the PR's head SHA
+			// to prevent false positives from reused branch names.
+			localSHA, shaErr := git.RevParse(s.RepoPath, s.Branch)
+			if shaErr == nil && localSHA == info.HeadSHA {
+				s.PRNumber = info.Number
+				s.PRMergedAt = info.MergedAt
+			}
 		}
 
 		return prCheckResult{branch: s}
@@ -428,14 +498,14 @@ func printStaleSummary(stale []branches.StaleBranch) {
 			currentRepo = s.RepoName
 			fmt.Printf("  %s\n", bold.Sprint(s.RepoName))
 		}
+
+		scope := "local only"
+		if s.HasRemote {
+			scope = "local + remote"
+		}
+
 		age := formatAge(s.LastCommit)
 		subject := truncate(s.LastCommitMessage, maxCommitSummaryLen)
-
-		tags := staleTags(s)
-		tagStr := ""
-		if len(tags) > 0 {
-			tagStr = " [" + strings.Join(tags, ", ") + "]"
-		}
 
 		// Highlight local-only branches with commits ahead to warn about data loss.
 		aheadStr := fmt.Sprintf("+%d", s.CommitsAhead)
@@ -443,34 +513,15 @@ func printStaleSummary(stale []branches.StaleBranch) {
 			aheadStr = yellow.Sprintf("+%d", s.CommitsAhead)
 		}
 
-		fmt.Printf("    %s  %s  %s  %s/-%d%s\n",
+		fmt.Printf("    %s (%s)  %s  %s  %s/-%d\n",
 			s.Branch,
-			dim.Sprintf("(%s)", age),
+			scope,
+			dim.Sprintf("last commit %s", age),
 			dim.Sprint(subject),
 			aheadStr, s.CommitsBehind,
-			dim.Sprint(tagStr),
 		)
 	}
 	fmt.Println()
-}
-
-// staleTags returns the display tags for a stale branch based on its
-// remote status, automation origin, and authorship.
-func staleTags(s branches.StaleBranch) []string {
-	var tags []string
-	if s.HasRemote {
-		tags = append(tags, "remote")
-	}
-	if s.IsLocalOnly {
-		tags = append(tags, "local-only")
-	}
-	if s.IsAutomation {
-		tags = append(tags, "automation")
-	}
-	if !s.IsOwnBranch {
-		tags = append(tags, "other-author")
-	}
-	return tags
 }
 
 // maxCommitSummaryLen is the maximum characters for commit messages in the
@@ -610,19 +661,31 @@ func promptTierSelection(title, description string, tier []branches.StaleBranch,
 }
 
 // staleBranchLabel builds a display label for a stale branch option including
-// commit subject, age, commit delta, and status tags.
+// scope, age, commit subject, commit delta, and PR merge info.
 func staleBranchLabel(s branches.StaleBranch) string {
+	scope := "local only"
+	if s.HasRemote {
+		scope = "local + remote"
+	}
+
 	age := formatAge(s.LastCommit)
 	subject := truncate(s.LastCommitMessage, maxCommitSummaryLen)
 
-	tags := staleTags(s)
-	tagStr := ""
-	if len(tags) > 0 {
-		tagStr = fmt.Sprintf("  [%s]", strings.Join(tags, ", "))
+	label := fmt.Sprintf("%s: %s (%s) - last commit %s", s.RepoName, s.Branch, scope, age)
+	if subject != "" {
+		label += fmt.Sprintf(" - \"%s\"", subject)
+	}
+	label += fmt.Sprintf(" +%d/-%d", s.CommitsAhead, s.CommitsBehind)
+
+	if s.PRNumber > 0 {
+		if !s.PRMergedAt.IsZero() {
+			label += fmt.Sprintf(" [merged PR #%d on %s]", s.PRNumber, s.PRMergedAt.Format("Jan 2, 2006"))
+		} else {
+			label += fmt.Sprintf(" [merged PR #%d]", s.PRNumber)
+		}
 	}
 
-	return fmt.Sprintf("%s: %s  (%s)  %s  +%d/-%d%s",
-		s.RepoName, s.Branch, age, subject, s.CommitsAhead, s.CommitsBehind, tagStr)
+	return label
 }
 
 // promptForStaleRemoteDeletion asks whether to also delete remote branches
@@ -654,6 +717,13 @@ func promptForStaleRemoteDeletion(selected []branches.StaleBranch) (bool, error)
 	return deleteRemote, nil
 }
 
+// isRemoteRefNotFound returns true if the error indicates the remote
+// branch has already been deleted. This matches against git's error
+// message text, which could vary across locales or git versions.
+func isRemoteRefNotFound(err error) bool {
+	return strings.Contains(err.Error(), "remote ref does not exist")
+}
+
 // safeToDeleteRemote returns true if the branch can safely have its remote
 // deleted. Automation branches and branches with other contributors should
 // never have their remotes deleted by this tool.
@@ -664,53 +734,18 @@ func safeToDeleteRemote(s branches.StaleBranch) bool {
 // executeStaleDeletes deletes the selected stale branches locally, and
 // optionally their remote counterparts where safe.
 func executeStaleDeletes(selected []branches.StaleBranch, deleteRemote bool) error {
-	bold := color.New(color.Bold)
-	var failures []string
-	var remoteFailures []string
-
-	for _, s := range selected {
-		slog.Debug("deleting branch", "repo", s.RepoName, "branch", s.Branch)
-		if err := git.DeleteLocalBranch(s.RepoPath, s.Branch, true); err != nil {
-			fmt.Printf("  failed to delete %s in %s: %v\n", s.Branch, s.RepoName, err)
-			failures = append(failures, s.Label())
-			continue
-		}
-		fmt.Printf("  deleted %s in %s\n", s.Branch, s.RepoName)
-
-		if deleteRemote && s.HasRemote && safeToDeleteRemote(s) {
-			if err := git.DeleteRemoteBranch(s.RepoPath, "origin", s.Branch); err != nil {
-				fmt.Printf("  failed to delete remote %s in %s: %v\n", s.Branch, s.RepoName, err)
-				remoteFailures = append(remoteFailures, s.Label())
-				continue
-			}
-			fmt.Printf("  deleted remote %s in %s\n", s.Branch, s.RepoName)
+	toDelete := make([]branchToDelete, len(selected))
+	for i, s := range selected {
+		toDelete[i] = branchToDelete{
+			repoPath:        s.RepoPath,
+			repoName:        s.RepoName,
+			branch:          s.Branch,
+			hasRemote:       s.HasRemote,
+			canDeleteRemote: safeToDeleteRemote(s),
+			label:           s.Label(),
 		}
 	}
-
-	fmt.Println()
-	deleted := len(selected) - len(failures)
-	if deleted > 0 {
-		fmt.Println(bold.Sprintf("Deleted %d branch(es).", deleted))
-	}
-	if deleteRemote {
-		remoteCount := 0
-		for _, s := range selected {
-			if s.HasRemote && safeToDeleteRemote(s) {
-				remoteCount++
-			}
-		}
-		remoteDeleted := remoteCount - len(remoteFailures)
-		if remoteDeleted > 0 {
-			fmt.Println(bold.Sprintf("Deleted %d remote branch(es).", remoteDeleted))
-		}
-	}
-
-	failures = append(failures, remoteFailures...)
-	if len(failures) > 0 {
-		return fmt.Errorf("failed to delete %d branch(es): %s",
-			len(failures), strings.Join(failures, ", "))
-	}
-	return nil
+	return deleteBranches(toDelete, deleteRemote, true)
 }
 
 func truncate(s string, maxLen int) string {

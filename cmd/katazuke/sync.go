@@ -9,6 +9,8 @@ import (
 	"github.com/fatih/color"
 
 	"github.com/agrahamlincoln/katazuke/internal/config"
+	ghclient "github.com/agrahamlincoln/katazuke/internal/github"
+	"github.com/agrahamlincoln/katazuke/internal/merge"
 	"github.com/agrahamlincoln/katazuke/internal/metrics"
 	"github.com/agrahamlincoln/katazuke/internal/scanner"
 	"github.com/agrahamlincoln/katazuke/internal/sync"
@@ -90,10 +92,14 @@ func (c *SyncCmd) Run(globals *CLI) error {
 	bold := color.New(color.Bold)
 	dim := color.New(color.FgHiBlack)
 
+	gh := ghclient.NewClient(cfg.GithubToken)
+	detector := merge.NewDetector(merge.RealGitChecker{}, gh)
+	gitOps := sync.NewRealGitOps(detector)
+
 	var synced, skipped, failed, switched int
 	syncStart := time.Now()
 
-	sync.All(repoPaths, opts, sync.RealGitOps{}, workers, func(completed, total int, r sync.Result) {
+	sync.All(repoPaths, opts, gitOps, workers, func(completed, total int, r sync.Result) {
 		remaining := total - completed
 
 		// Clear the status line, print result, redraw status.

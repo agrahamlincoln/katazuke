@@ -11,6 +11,7 @@ import (
 
 	"github.com/agrahamlincoln/katazuke/internal/config"
 	"github.com/agrahamlincoln/katazuke/internal/github"
+	"github.com/agrahamlincoln/katazuke/internal/merge"
 	"github.com/agrahamlincoln/katazuke/internal/metrics"
 	"github.com/agrahamlincoln/katazuke/internal/repos"
 	"github.com/agrahamlincoln/katazuke/internal/scanner"
@@ -106,11 +107,12 @@ func (c *ReposCmd) runAll(globals *CLI) error {
 	fmt.Println()
 
 	// Find merged branch repos.
+	ghClient := github.NewClient(cfg.GithubToken)
+	detector := merge.NewDetector(merge.RealGitChecker{}, ghClient)
 	fmt.Printf("Checking for repos on merged branches...\n")
-	mergedRepos := repos.FindOnMergedBranch(repoPaths, workers, progressPrinter())
+	mergedRepos := repos.FindOnMergedBranch(repoPaths, detector, workers, progressPrinter())
 
 	// Find archived repos.
-	ghClient := github.NewClient(cfg.GithubToken)
 	fmt.Printf("Checking archive status...\n")
 	archived := repos.FindArchived(repoPaths, ghClient, workers, progressPrinter())
 
@@ -172,8 +174,11 @@ func (c *ReposCmd) runMerged(globals *CLI) error {
 	slog.Debug("using worker pool", "workers", workers)
 	fmt.Printf("Checking %d repositories for merged branches...\n", len(repoPaths))
 
+	ghClient := github.NewClient(cfg.GithubToken)
+	detector := merge.NewDetector(merge.RealGitChecker{}, ghClient)
+
 	scanStart := time.Now()
-	mergedRepos := repos.FindOnMergedBranch(repoPaths, workers, progressPrinter())
+	mergedRepos := repos.FindOnMergedBranch(repoPaths, detector, workers, progressPrinter())
 	_ = ml.LogPerf(len(repoPaths), int(time.Since(scanStart).Milliseconds()))
 
 	if len(mergedRepos) == 0 {

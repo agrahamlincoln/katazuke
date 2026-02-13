@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"path/filepath"
 
+	"github.com/agrahamlincoln/katazuke/internal/merge"
 	"github.com/agrahamlincoln/katazuke/internal/parallel"
 	"github.com/agrahamlincoln/katazuke/pkg/git"
 )
@@ -20,11 +21,14 @@ type MergedBranchRepo struct {
 
 // FindOnMergedBranch scans the given repository paths and identifies repos
 // that are checked out on a branch that has been merged into the default
-// branch. Work is parallelized across the given number of workers.
+// branch. Work is parallelized across the given number of workers. The
+// detector combines local git checks with GitHub API lookups to catch
+// squash-merges.
 //
-// Note: this operates on locally cached remote refs without fetching first,
-// so results reflect the last fetch rather than current remote state.
-func FindOnMergedBranch(repos []string, workers int, onProgress func(completed, total int)) []MergedBranchRepo {
+// Note: local git checks operate on locally cached remote refs without
+// fetching first, so results reflect the last fetch rather than current
+// remote state.
+func FindOnMergedBranch(repos []string, detector *merge.Detector, workers int, onProgress func(completed, total int)) []MergedBranchRepo {
 	var resultCb func(int, int, *MergedBranchRepo)
 	if onProgress != nil {
 		resultCb = func(completed, total int, _ *MergedBranchRepo) {
@@ -32,7 +36,9 @@ func FindOnMergedBranch(repos []string, workers int, onProgress func(completed, 
 		}
 	}
 
-	results := parallel.Run(repos, workers, checkMergedBranch, resultCb)
+	results := parallel.Run(repos, workers, func(repoPath string) *MergedBranchRepo {
+		return checkMergedBranch(repoPath, detector)
+	}, resultCb)
 
 	var merged []MergedBranchRepo
 	for _, r := range results {
@@ -43,7 +49,7 @@ func FindOnMergedBranch(repos []string, workers int, onProgress func(completed, 
 	return merged
 }
 
-func checkMergedBranch(repoPath string) *MergedBranchRepo {
+func checkMergedBranch(repoPath string, detector *merge.Detector) *MergedBranchRepo {
 	name := filepath.Base(repoPath)
 
 	currentBranch, err := git.CurrentBranch(repoPath)
@@ -66,19 +72,15 @@ func checkMergedBranch(repoPath string) *MergedBranchRepo {
 		return nil
 	}
 
-	// Check if the remote default branch exists for merge check.
-	if !git.HasRemote(repoPath, "origin") {
-		// Without a remote, check against local default branch.
-		merged, err := git.IsMerged(repoPath, currentBranch, defaultBranch)
-		if err != nil || !merged {
-			return nil
-		}
-	} else {
-		remoteDefault := "origin/" + defaultBranch
-		merged, err := git.IsMerged(repoPath, currentBranch, remoteDefault)
-		if err != nil || !merged {
-			return nil
-		}
+	// Determine merge base: use remote default branch if available.
+	base := defaultBranch
+	if git.HasRemote(repoPath, "origin") {
+		base = "origin/" + defaultBranch
+	}
+
+	merged, err := detector.IsMerged(repoPath, currentBranch, base)
+	if err != nil || !merged {
+		return nil
 	}
 
 	clean, err := git.IsClean(repoPath)

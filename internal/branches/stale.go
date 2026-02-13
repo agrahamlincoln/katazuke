@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agrahamlincoln/katazuke/internal/merge"
 	"github.com/agrahamlincoln/katazuke/internal/parallel"
 	"github.com/agrahamlincoln/katazuke/pkg/git"
 )
@@ -32,6 +33,10 @@ type StaleBranch struct {
 	// IsOwnBranch is true when the user is the sole author of all commits
 	// on this branch since it diverged from the default branch.
 	IsOwnBranch bool
+	// PRNumber is the GitHub PR number if the branch has a merged PR.
+	PRNumber int
+	// PRMergedAt is the timestamp when the PR was merged.
+	PRMergedAt time.Time
 }
 
 // Label returns a display string for the stale branch in the form "repo: branch".
@@ -62,19 +67,10 @@ func IsAutomationBranch(branch string) bool {
 // FindStale scans the given repositories and returns branches whose last commit
 // is older than the given threshold. Merged branches, the default branch, and
 // the currently checked out branch are excluded. Work is parallelized across
-// the given number of workers.
-func FindStale(repos []string, threshold time.Duration, workers int, onProgress func(completed, total int)) ([]StaleBranch, error) {
+// the given number of workers. The detector combines local git checks with
+// GitHub API lookups to determine which branches are merged.
+func FindStale(repos []string, threshold time.Duration, detector *merge.Detector, workers int, onProgress func(completed, total int)) ([]StaleBranch, error) {
 	cutoff := time.Now().Add(-threshold)
-
-	type staleArgs struct {
-		repoPath string
-		cutoff   time.Time
-	}
-
-	args := make([]staleArgs, len(repos))
-	for i, r := range repos {
-		args[i] = staleArgs{repoPath: r, cutoff: cutoff}
-	}
 
 	var resultCb func(int, int, []StaleBranch)
 	if onProgress != nil {
@@ -83,8 +79,8 @@ func FindStale(repos []string, threshold time.Duration, workers int, onProgress 
 		}
 	}
 
-	repoResults := parallel.Run(args, workers, func(a staleArgs) []StaleBranch {
-		return findStaleInRepo(a.repoPath, a.cutoff)
+	repoResults := parallel.Run(repos, workers, func(repoPath string) []StaleBranch {
+		return findStaleInRepo(repoPath, cutoff, detector)
 	}, resultCb)
 
 	results := make([]StaleBranch, 0, len(repoResults))
@@ -94,7 +90,7 @@ func FindStale(repos []string, threshold time.Duration, workers int, onProgress 
 	return results, nil
 }
 
-func findStaleInRepo(repoPath string, cutoff time.Time) []StaleBranch {
+func findStaleInRepo(repoPath string, cutoff time.Time, detector *merge.Detector) []StaleBranch {
 	repoName := filepath.Base(repoPath)
 
 	defaultBranch, err := git.DefaultBranch(repoPath)
@@ -122,7 +118,16 @@ func findStaleInRepo(repoPath string, cutoff time.Time) []StaleBranch {
 		return nil
 	}
 
-	mergedBranches, err := git.MergedBranches(repoPath, defaultBranch)
+	// Filter out default and current branches before passing to the detector
+	// to avoid unnecessary API calls for branches we'd discard anyway.
+	candidates := make([]string, 0, len(allBranches))
+	for _, b := range allBranches {
+		if b != defaultBranch && b != currentBranch {
+			candidates = append(candidates, b)
+		}
+	}
+
+	mergedBranches, err := detector.MergedBranches(repoPath, defaultBranch, candidates)
 	if err != nil {
 		slog.Warn("skipping repo: could not list merged branches",
 			"repo", repoName, "error", err)

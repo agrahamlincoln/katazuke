@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 )
@@ -91,16 +92,27 @@ const (
 
 // prSearchResponse holds the response from the GitHub pulls API.
 type prSearchResponse struct {
+	Number   int    `json:"number"`
 	State    string `json:"state"`
 	MergedAt string `json:"merged_at"`
+	Head     struct {
+		SHA string `json:"sha"`
+	} `json:"head"`
 }
 
-// BranchPRState returns the PR state for a branch. It checks the most recent
-// PR associated with the given head branch. Returns PRStateNone if no PR
-// exists for the branch.
-func (c *Client) BranchPRState(owner, repo, branch string) (PRState, error) {
+// PRInfo contains detailed information about a pull request for a branch.
+type PRInfo struct {
+	Number   int
+	State    PRState
+	MergedAt time.Time
+	HeadSHA  string
+}
+
+// BranchPRInfo returns detailed PR information for a branch. When no PR exists,
+// the returned PRInfo has State set to PRStateNone.
+func (c *Client) BranchPRInfo(owner, repo, branch string) (*PRInfo, error) {
 	if c.rest == nil {
-		return PRStateNone, fmt.Errorf("no GitHub API client available")
+		return nil, fmt.Errorf("no GitHub API client available")
 	}
 
 	var prs []prSearchResponse
@@ -110,21 +122,32 @@ func (c *Client) BranchPRState(owner, repo, branch string) (PRState, error) {
 		&prs,
 	)
 	if err != nil {
-		return PRStateNone, fmt.Errorf("querying PRs for %s/%s branch %s: %w", owner, repo, branch, err)
+		return nil, fmt.Errorf("querying PRs for %s/%s branch %s: %w", owner, repo, branch, err)
 	}
 
 	if len(prs) == 0 {
-		return PRStateNone, nil
+		return &PRInfo{State: PRStateNone}, nil
 	}
 
 	pr := prs[0]
-	if pr.State == "open" {
-		return PRStateOpen, nil
+	info := &PRInfo{
+		Number:  pr.Number,
+		HeadSHA: pr.Head.SHA,
 	}
-	if pr.MergedAt != "" {
-		return PRStateMerged, nil
+
+	switch {
+	case pr.State == "open":
+		info.State = PRStateOpen
+	case pr.MergedAt != "":
+		info.State = PRStateMerged
+		if t, err := time.Parse(time.RFC3339, pr.MergedAt); err == nil {
+			info.MergedAt = t
+		}
+	default:
+		info.State = PRStateClosed
 	}
-	return PRStateClosed, nil
+
+	return info, nil
 }
 
 // sshRemoteRe matches SSH-style GitHub remote URLs:
