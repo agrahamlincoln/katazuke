@@ -127,15 +127,15 @@ func findStaleInRepo(repoPath string, cutoff time.Time, detector *merge.Detector
 		}
 	}
 
-	mergedBranches, err := detector.MergedBranches(repoPath, defaultBranch, candidates)
+	detected, err := detector.MergedBranches(repoPath, defaultBranch, candidates)
 	if err != nil {
 		slog.Warn("skipping repo: could not list merged branches",
 			"repo", repoName, "error", err)
 		return nil
 	}
-	mergedSet := make(map[string]bool, len(mergedBranches))
-	for _, b := range mergedBranches {
-		mergedSet[b] = true
+	mergedSet := make(map[string]bool, len(detected))
+	for _, d := range detected {
+		mergedSet[d.Name] = true
 	}
 
 	// Get the user's identity for authorship checking.

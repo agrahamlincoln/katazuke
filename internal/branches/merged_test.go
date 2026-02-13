@@ -55,6 +55,9 @@ func TestFindMerged_OneMergedBranch(t *testing.T) {
 	if results[0].RepoName != "one-merged" {
 		t.Errorf("expected repo name one-merged, got %q", results[0].RepoName)
 	}
+	if results[0].ForceDelete {
+		t.Error("expected ForceDelete=false for git-detected merged branch")
+	}
 }
 
 func TestFindMerged_ExcludesDefaultAndCurrentBranch(t *testing.T) {

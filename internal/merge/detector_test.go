@@ -186,14 +186,25 @@ func TestMergedBranches_UnionOfGitAndAPI(t *testing.T) {
 		t.Fatalf("expected 3 merged branches, got %d: %v", len(result), result)
 	}
 
-	resultSet := make(map[string]bool, len(result))
+	resultMap := make(map[string]merge.DetectedBranch, len(result))
 	for _, b := range result {
-		resultSet[b] = true
+		resultMap[b.Name] = b
 	}
 	for _, want := range []string{"branch-a", "branch-b", "branch-c"} {
-		if !resultSet[want] {
+		if _, ok := resultMap[want]; !ok {
 			t.Errorf("expected %q in result", want)
 		}
+	}
+
+	// Verify detection methods.
+	if resultMap["branch-a"].Method != merge.DetectedByGit {
+		t.Error("expected branch-a to be DetectedByGit")
+	}
+	if resultMap["branch-b"].Method != merge.DetectedByGitHub {
+		t.Error("expected branch-b to be DetectedByGitHub")
+	}
+	if resultMap["branch-c"].Method != merge.DetectedByGitHub {
+		t.Error("expected branch-c to be DetectedByGitHub")
 	}
 
 	// branch-a is already git-merged, so only branch-b and branch-c should
@@ -227,6 +238,23 @@ func TestMergedBranches_PassesCorrectBranchNames(t *testing.T) {
 		t.Fatalf("expected 2 merged branches, got %d: %v", len(result), result)
 	}
 
+	resultMap := make(map[string]merge.DetectedBranch, len(result))
+	for _, b := range result {
+		resultMap[b.Name] = b
+	}
+	if _, ok := resultMap["already-merged"]; !ok {
+		t.Error("expected already-merged in result")
+	}
+	if _, ok := resultMap["squash-merged"]; !ok {
+		t.Error("expected squash-merged in result")
+	}
+	if resultMap["already-merged"].Method != merge.DetectedByGit {
+		t.Error("expected already-merged to be DetectedByGit")
+	}
+	if resultMap["squash-merged"].Method != merge.DetectedByGitHub {
+		t.Error("expected squash-merged to be DetectedByGitHub")
+	}
+
 	// already-merged is git-merged, so only the other two should hit the API.
 	if len(prMock.calls) != 2 {
 		t.Fatalf("expected 2 API calls, got %d: %v", len(prMock.calls), prMock.calls)
@@ -258,7 +286,10 @@ func TestMergedBranches_NilPRChecker(t *testing.T) {
 	if len(result) != 1 {
 		t.Fatalf("expected 1 merged branch in git-only mode, got %d: %v", len(result), result)
 	}
-	if result[0] != "branch-a" {
-		t.Errorf("expected branch-a, got %q", result[0])
+	if result[0].Name != "branch-a" {
+		t.Errorf("expected branch-a, got %q", result[0].Name)
+	}
+	if result[0].Method != merge.DetectedByGit {
+		t.Error("expected DetectedByGit in git-only mode")
 	}
 }

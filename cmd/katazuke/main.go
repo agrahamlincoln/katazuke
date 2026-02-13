@@ -160,20 +160,42 @@ func (c *BranchesCmd) runMerged(globals *CLI) error {
 	return deleteSelectedBranches(selected, deleteRemote)
 }
 
+// mergedSummaryThreshold is the number of branches above which the
+// merged summary shows per-repo counts instead of individual branches.
+const mergedSummaryThreshold = 25
+
 func printMergedSummary(merged []branches.MergedBranch) {
 	bold := color.New(color.Bold)
 	dim := color.New(color.FgHiBlack)
 
 	fmt.Printf("\n%s\n\n", bold.Sprintf("Found %d merged branch(es):", len(merged)))
 
-	currentRepo := ""
-	for _, m := range merged {
-		if m.RepoName != currentRepo {
-			currentRepo = m.RepoName
-			fmt.Printf("  %s\n", bold.Sprint(m.RepoName))
+	if len(merged) > mergedSummaryThreshold {
+		counts := make(map[string]int)
+		var order []string
+		for _, m := range merged {
+			if counts[m.RepoName] == 0 {
+				order = append(order, m.RepoName)
+			}
+			counts[m.RepoName]++
 		}
-		age := formatAge(m.LastCommit)
-		fmt.Printf("    %s  %s\n", m.Branch, dim.Sprintf("(%s)", age))
+		for _, repo := range order {
+			noun := "branches"
+			if counts[repo] == 1 {
+				noun = "branch"
+			}
+			fmt.Printf("  %s  %s\n", bold.Sprint(repo), dim.Sprintf("(%d %s)", counts[repo], noun))
+		}
+	} else {
+		currentRepo := ""
+		for _, m := range merged {
+			if m.RepoName != currentRepo {
+				currentRepo = m.RepoName
+				fmt.Printf("  %s\n", bold.Sprint(m.RepoName))
+			}
+			age := formatAge(m.LastCommit)
+			fmt.Printf("    %s  %s\n", m.Branch, dim.Sprintf("(%s)", age))
+		}
 	}
 	fmt.Println()
 }
@@ -190,6 +212,7 @@ func promptForDeletion(merged []branches.MergedBranch) ([]branches.MergedBranch,
 			huh.NewMultiSelect[int]().
 				Title("Select branches to delete").
 				Options(options...).
+				Height(15).
 				Value(&selectedIndices),
 		),
 	)
@@ -244,32 +267,37 @@ type branchToDelete struct {
 	// with other contributors, preventing remote deletion even when
 	// the user opts in.
 	canDeleteRemote bool
-	label           string
+	// forceLocal controls whether git branch -D (force) is used instead
+	// of -d. Required for squash-merged branches that git does not
+	// recognize as merged, and for stale branches.
+	forceLocal bool
 }
 
 // deleteBranches deletes branches locally and optionally their remote
-// counterparts. forceLocal controls whether git branch -D (force) is used.
-func deleteBranches(toDelete []branchToDelete, deleteRemote, forceLocal bool) error {
+// counterparts. Each branch's forceLocal field controls whether
+// git branch -D (force) is used for that specific branch.
+func deleteBranches(toDelete []branchToDelete, deleteRemote bool) error {
 	bold := color.New(color.Bold)
 	green := color.New(color.FgGreen)
 	yellow := color.New(color.FgYellow)
 	red := color.New(color.FgRed)
 	dim := color.New(color.FgHiBlack)
 
-	var failed []string
+	var localFailed []string
 	var remoteFailed []string
 	total := len(toDelete)
 
 	for i, b := range toDelete {
 		completed := i + 1
 		remaining := total - completed
+		label := fmt.Sprintf("%s: %s", b.repoName, b.branch)
 
 		fmt.Print(clearLine)
 
 		slog.Debug("deleting branch", "repo", b.repoName, "branch", b.branch)
-		if err := git.DeleteLocalBranch(b.repoPath, b.branch, forceLocal); err != nil {
+		if err := git.DeleteLocalBranch(b.repoPath, b.branch, b.forceLocal); err != nil {
 			fmt.Printf("  %s %s: %s (%v)\n", red.Sprint("[fail]"), b.repoName, b.branch, err)
-			failed = append(failed, b.label)
+			localFailed = append(localFailed, label)
 			if remaining > 0 {
 				fmt.Printf("%s  %s %d remaining...", clearLine, dim.Sprintf("[%d/%d]", completed, total), remaining)
 			}
@@ -283,7 +311,7 @@ func deleteBranches(toDelete []branchToDelete, deleteRemote, forceLocal bool) er
 					fmt.Printf("  %s %s: %s (remote already deleted)\n", yellow.Sprint("[skip]"), b.repoName, b.branch)
 				} else {
 					fmt.Printf("  %s %s: %s remote (%v)\n", red.Sprint("[fail]"), b.repoName, b.branch, err)
-					remoteFailed = append(remoteFailed, b.label)
+					remoteFailed = append(remoteFailed, label)
 				}
 			} else {
 				fmt.Printf("  %s %s: %s (remote)\n", green.Sprint("[deleted]"), b.repoName, b.branch)
@@ -298,7 +326,7 @@ func deleteBranches(toDelete []branchToDelete, deleteRemote, forceLocal bool) er
 	fmt.Print(clearLine)
 
 	fmt.Println()
-	deleted := len(toDelete) - len(failed)
+	deleted := len(toDelete) - len(localFailed)
 	if deleted > 0 {
 		fmt.Println(bold.Sprintf("Deleted %d branch(es).", deleted))
 	}
@@ -315,10 +343,17 @@ func deleteBranches(toDelete []branchToDelete, deleteRemote, forceLocal bool) er
 		}
 	}
 
-	failed = append(failed, remoteFailed...)
-	if len(failed) > 0 {
-		return fmt.Errorf("failed to delete %d branch(es): %s",
-			len(failed), strings.Join(failed, ", "))
+	var errParts []string
+	if len(localFailed) > 0 {
+		errParts = append(errParts, fmt.Sprintf("failed to delete %d local branch(es): %s",
+			len(localFailed), strings.Join(localFailed, ", ")))
+	}
+	if len(remoteFailed) > 0 {
+		errParts = append(errParts, fmt.Sprintf("failed to delete %d remote branch(es): %s",
+			len(remoteFailed), strings.Join(remoteFailed, ", ")))
+	}
+	if len(errParts) > 0 {
+		return fmt.Errorf("%s", strings.Join(errParts, "; "))
 	}
 	return nil
 }
@@ -332,10 +367,10 @@ func deleteSelectedBranches(selected []branches.MergedBranch, deleteRemote bool)
 			branch:          m.Branch,
 			hasRemote:       m.HasRemote,
 			canDeleteRemote: true,
-			label:           m.Label(),
+			forceLocal:      m.ForceDelete,
 		}
 	}
-	return deleteBranches(toDelete, deleteRemote, false)
+	return deleteBranches(toDelete, deleteRemote)
 }
 
 func (c *BranchesCmd) runStale(globals *CLI) error {
@@ -645,6 +680,7 @@ func promptTierSelection(title, description string, tier []branches.StaleBranch,
 				Title(title).
 				Description(description).
 				Options(options...).
+				Height(15).
 				Value(&selectedIndices),
 		),
 	)
@@ -742,10 +778,10 @@ func executeStaleDeletes(selected []branches.StaleBranch, deleteRemote bool) err
 			branch:          s.Branch,
 			hasRemote:       s.HasRemote,
 			canDeleteRemote: safeToDeleteRemote(s),
-			label:           s.Label(),
+			forceLocal:      true,
 		}
 	}
-	return deleteBranches(toDelete, deleteRemote, true)
+	return deleteBranches(toDelete, deleteRemote)
 }
 
 func truncate(s string, maxLen int) string {

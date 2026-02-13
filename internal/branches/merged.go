@@ -20,6 +20,10 @@ type MergedBranch struct {
 	Branch     string
 	LastCommit time.Time
 	HasRemote  bool
+	// ForceDelete is true when the branch was detected as merged via the
+	// GitHub API (e.g. squash-merge) rather than by git. These branches
+	// require git branch -D because git does not recognize them as merged.
+	ForceDelete bool
 }
 
 // FindMerged scans the given repositories and returns branches that have been
@@ -83,7 +87,7 @@ func findMergedInRepo(repoPath string, detector *merge.Detector) []MergedBranch 
 		}
 	}
 
-	merged, err := detector.MergedBranches(repoPath, defaultBranch, candidates)
+	detected, err := detector.MergedBranches(repoPath, defaultBranch, candidates)
 	if err != nil {
 		slog.Warn("skipping repo: could not list merged branches",
 			"repo", repoName, "error", err)
@@ -94,29 +98,30 @@ func findMergedInRepo(repoPath string, detector *merge.Detector) []MergedBranch 
 	// branches since git branch --merged is not filtered by the
 	// candidates list. Exclude them here as a safety net.
 	var results []MergedBranch
-	for _, branch := range merged {
-		if branch == defaultBranch || branch == currentBranch {
+	for _, d := range detected {
+		if d.Name == defaultBranch || d.Name == currentBranch {
 			continue
 		}
 
-		commitDate, err := git.CommitDate(repoPath, branch)
+		commitDate, err := git.CommitDate(repoPath, d.Name)
 		if err != nil {
 			slog.Warn("could not get commit date, using zero time",
-				"repo", repoName, "branch", branch, "error", err)
+				"repo", repoName, "branch", d.Name, "error", err)
 		}
 
-		hasRemote, err := git.HasRemoteBranch(repoPath, "origin", branch)
+		hasRemote, err := git.HasRemoteBranch(repoPath, "origin", d.Name)
 		if err != nil {
 			slog.Debug("could not check remote branch",
-				"repo", repoName, "branch", branch, "error", err)
+				"repo", repoName, "branch", d.Name, "error", err)
 		}
 
 		results = append(results, MergedBranch{
-			RepoPath:   repoPath,
-			RepoName:   repoName,
-			Branch:     branch,
-			LastCommit: commitDate,
-			HasRemote:  hasRemote,
+			RepoPath:    repoPath,
+			RepoName:    repoName,
+			Branch:      d.Name,
+			LastCommit:  commitDate,
+			HasRemote:   hasRemote,
+			ForceDelete: d.Method == merge.DetectedByGitHub,
 		})
 	}
 

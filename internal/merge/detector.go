@@ -10,6 +10,26 @@ import (
 	"github.com/agrahamlincoln/katazuke/internal/github"
 )
 
+// DetectionMethod indicates how a branch was determined to be merged.
+type DetectionMethod int
+
+const (
+	// DetectedByGit means git recognized the branch as merged (fast-forward
+	// or regular merge into the base branch).
+	DetectedByGit DetectionMethod = iota
+	// DetectedByGitHub means the GitHub API reported the branch's PR as
+	// merged (e.g. squash-merge, which git does not recognize locally).
+	DetectedByGitHub
+)
+
+// DetectedBranch pairs a branch name with the method used to detect it
+// as merged. Callers use the method to decide whether force-deletion is
+// needed (GitHub-detected branches require git branch -D).
+type DetectedBranch struct {
+	Name   string
+	Method DetectionMethod
+}
+
 // GitChecker defines the git operations needed for merge detection.
 // RemoteURL is included because the detector needs it to determine the
 // GitHub owner/repo for API fallback on non-git-merged branches.
@@ -48,7 +68,9 @@ func GitOnlyDetector() *Detector {
 
 // IsMerged returns true if branch has been merged into base. It first
 // checks the local git state (fast path), then falls back to querying
-// the GitHub API for PR merge status.
+// the GitHub API for PR merge status. Callers that need to know the
+// detection method (e.g. for force-deletion decisions) should use
+// MergedBranches instead.
 func (d *Detector) IsMerged(repoPath, branch, base string) (bool, error) {
 	merged, err := d.git.IsMerged(repoPath, branch, base)
 	if err != nil {
@@ -67,8 +89,9 @@ func (d *Detector) IsMerged(repoPath, branch, base string) (bool, error) {
 
 // MergedBranches returns branches that have been merged into base. It
 // first collects the git-local merged set, then checks any remaining
-// branches against the GitHub API.
-func (d *Detector) MergedBranches(repoPath, base string, allBranches []string) ([]string, error) {
+// branches against the GitHub API. Each result includes the detection
+// method so callers can decide whether force-deletion is needed.
+func (d *Detector) MergedBranches(repoPath, base string, allBranches []string) ([]DetectedBranch, error) {
 	gitMerged, err := d.git.MergedBranches(repoPath, base)
 	if err != nil {
 		return nil, err
@@ -79,23 +102,27 @@ func (d *Detector) MergedBranches(repoPath, base string, allBranches []string) (
 		gitMergedSet[b] = true
 	}
 
+	result := make([]DetectedBranch, 0, len(gitMerged))
+	for _, b := range gitMerged {
+		result = append(result, DetectedBranch{Name: b, Method: DetectedByGit})
+	}
+
 	if d.pr == nil {
-		return gitMerged, nil
+		return result, nil
 	}
 
 	owner, repo, ok := d.resolveGitHubRepo(repoPath)
 	if !ok {
-		return gitMerged, nil
+		return result, nil
 	}
 
 	// Check branches not in the git-merged set via GitHub API.
-	result := append([]string{}, gitMerged...)
 	for _, branch := range allBranches {
 		if gitMergedSet[branch] {
 			continue
 		}
 		if d.isPRMerged(owner, repo, branch) {
-			result = append(result, branch)
+			result = append(result, DetectedBranch{Name: branch, Method: DetectedByGitHub})
 		}
 	}
 
