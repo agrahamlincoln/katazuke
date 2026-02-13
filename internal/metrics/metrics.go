@@ -27,7 +27,6 @@ type Event struct {
 	Suggestion *SuggestionEvent `json:"suggestion,omitempty"`
 	Perf       *PerfEvent       `json:"perf,omitempty"`
 	AgeDays    *int             `json:"age_days,omitempty"`
-	Impact     *ImpactEvent     `json:"impact,omitempty"`
 }
 
 // CommandEvent records which command was invoked.
@@ -47,11 +46,6 @@ type SuggestionEvent struct {
 type PerfEvent struct {
 	ReposScanned   int `json:"repos_scanned"`
 	ScanDurationMs int `json:"scan_duration_ms"`
-}
-
-// ImpactEvent records the impact of an action taken.
-type ImpactEvent struct {
-	DiskFreedBytes int64 `json:"disk_freed_bytes,omitempty"`
 }
 
 // Logger handles writing events to monthly JSONL files.

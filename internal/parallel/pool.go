@@ -34,12 +34,8 @@ func Run[T any, R any](items []T, workers int, fn func(T) R, onResult func(compl
 		return results
 	}
 
-	type indexedResult struct {
-		result R
-	}
-
 	jobs := make(chan T, total)
-	resultsCh := make(chan indexedResult, total)
+	resultsCh := make(chan R, total)
 
 	var wg sync.WaitGroup
 	for range workers {
@@ -47,8 +43,7 @@ func Run[T any, R any](items []T, workers int, fn func(T) R, onResult func(compl
 		go func() {
 			defer wg.Done()
 			for item := range jobs {
-				r := fn(item)
-				resultsCh <- indexedResult{result: r}
+				resultsCh <- fn(item)
 			}
 		}()
 	}
@@ -67,10 +62,10 @@ func Run[T any, R any](items []T, workers int, fn func(T) R, onResult func(compl
 
 	// Collect results sequentially, calling onResult for each.
 	results := make([]R, 0, total)
-	for ir := range resultsCh {
-		results = append(results, ir.result)
+	for r := range resultsCh {
+		results = append(results, r)
 		if onResult != nil {
-			onResult(len(results), total, ir.result)
+			onResult(len(results), total, r)
 		}
 	}
 

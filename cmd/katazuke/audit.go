@@ -52,12 +52,7 @@ func (c *AuditCmd) runNonGit(globals *CLI) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	projectsDir := globals.ProjectsDir
-	if projectsDir == "" || projectsDir == "~/projects" {
-		projectsDir = cfg.ProjectsDir
-	} else {
-		projectsDir = expandHome(projectsDir)
-	}
+	projectsDir := resolveProjectsDir(globals.ProjectsDir, cfg)
 
 	fmt.Printf("Scanning %s for non-repository directories...\n", projectsDir)
 

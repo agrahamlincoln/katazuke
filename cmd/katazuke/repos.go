@@ -26,9 +26,7 @@ type ReposCmd struct {
 // Run executes the repos command.
 func (c *ReposCmd) Run(globals *CLI) error {
 	if globals.Verbose {
-		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-			Level: slog.LevelDebug,
-		})))
+		enableVerboseLogging()
 	}
 
 	if c.Archived {
@@ -51,12 +49,7 @@ func (c *ReposCmd) loadRepos(globals *CLI) ([]string, *config.Config, *metrics.L
 		return nil, nil, nil, fmt.Errorf("loading config: %w", err)
 	}
 
-	projectsDir := globals.ProjectsDir
-	if projectsDir == "" || projectsDir == "~/projects" {
-		projectsDir = cfg.ProjectsDir
-	} else {
-		projectsDir = expandHome(projectsDir)
-	}
+	projectsDir := resolveProjectsDir(globals.ProjectsDir, cfg)
 
 	fmt.Printf("Scanning %s for repositories...\n", projectsDir)
 

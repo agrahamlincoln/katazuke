@@ -58,7 +58,20 @@ func Load() (Config, error) {
 	}
 
 	applyEnv(&cfg)
+
+	if !isValidStrategy(cfg.Sync.Strategy) {
+		return cfg, fmt.Errorf("invalid sync strategy %q (valid: rebase, merge, ff-only)", cfg.Sync.Strategy)
+	}
+
 	return cfg, nil
+}
+
+func isValidStrategy(s string) bool {
+	switch s {
+	case "rebase", "merge", "ff-only":
+		return true
+	}
+	return false
 }
 
 // configPath returns the path to the config file.
@@ -87,13 +100,13 @@ func loadFile(cfg *Config) error {
 	}
 
 	// Expand ~ in projects_dir.
-	cfg.ProjectsDir = expandHome(cfg.ProjectsDir)
+	cfg.ProjectsDir = ExpandHome(cfg.ProjectsDir)
 	return nil
 }
 
 func applyEnv(cfg *Config) {
 	if v := os.Getenv("KATAZUKE_PROJECTS_DIR"); v != "" {
-		cfg.ProjectsDir = expandHome(v)
+		cfg.ProjectsDir = ExpandHome(v)
 	}
 	if v := os.Getenv("KATAZUKE_STALE_THRESHOLD_DAYS"); v != "" {
 		if days, err := strconv.Atoi(v); err == nil && days > 0 {
@@ -134,7 +147,8 @@ func applyEnv(cfg *Config) {
 	}
 }
 
-func expandHome(path string) string {
+// ExpandHome replaces a leading ~/ in path with the user's home directory.
+func ExpandHome(path string) string {
 	if strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {

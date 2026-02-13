@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -31,7 +30,7 @@ var (
 type CLI struct {
 	DryRun      bool   `name:"dry-run" short:"n" help:"Show what would be done without making changes."`
 	Verbose     bool   `name:"verbose" short:"v" help:"Verbose output."`
-	ProjectsDir string `name:"projects-dir" short:"p" help:"Projects directory." default:"~/projects" env:"KATAZUKE_PROJECTS_DIR"`
+	ProjectsDir string `name:"projects-dir" short:"p" help:"Projects directory (default: from config file, or ~/projects)." default:"" env:"KATAZUKE_PROJECTS_DIR"`
 
 	Branches BranchesCmd `cmd:"" help:"Manage branches across repositories."`
 	Repos    ReposCmd    `cmd:"" help:"Manage repository checkouts."`
@@ -92,12 +91,7 @@ func (c *BranchesCmd) runMerged(globals *CLI) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	projectsDir := globals.ProjectsDir
-	if projectsDir == "" || projectsDir == "~/projects" {
-		projectsDir = cfg.ProjectsDir
-	} else {
-		projectsDir = expandHome(projectsDir)
-	}
+	projectsDir := resolveProjectsDir(globals.ProjectsDir, cfg)
 
 	slog.Debug("scanning for repositories", "dir", projectsDir)
 
@@ -309,12 +303,7 @@ func (c *BranchesCmd) runStale(globals *CLI) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	projectsDir := globals.ProjectsDir
-	if projectsDir == "" || projectsDir == "~/projects" {
-		projectsDir = cfg.ProjectsDir
-	} else {
-		projectsDir = expandHome(projectsDir)
-	}
+	projectsDir := resolveProjectsDir(globals.ProjectsDir, cfg)
 
 	staleDays := c.StaleDays
 	if staleDays <= 0 {
@@ -679,15 +668,13 @@ func enableVerboseLogging() {
 	})))
 }
 
-func expandHome(path string) string {
-	if strings.HasPrefix(path, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return path
-		}
-		return filepath.Join(home, path[2:])
+// resolveProjectsDir returns the projects directory from the CLI flag if
+// provided, otherwise from the loaded config (which has defaults applied).
+func resolveProjectsDir(cliValue string, cfg config.Config) string {
+	if cliValue != "" {
+		return config.ExpandHome(cliValue)
 	}
-	return path
+	return cfg.ProjectsDir
 }
 
 // VersionCmd shows version information.

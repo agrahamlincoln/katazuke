@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -176,16 +177,52 @@ func TestSyncEnvOverrides(t *testing.T) {
 	}
 }
 
+func TestInvalidSyncStrategy(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	configDir := filepath.Join(dir, "katazuke")
+	if err := os.MkdirAll(configDir, 0750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(
+		"sync:\n  strategy: yolo\n",
+	), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for invalid strategy, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid sync strategy") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInvalidSyncStrategyFromEnv(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("KATAZUKE_SYNC_STRATEGY", "invalid")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for invalid strategy from env, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid sync strategy") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestExpandHome(t *testing.T) {
 	home, _ := os.UserHomeDir()
-	got := expandHome("~/projects")
+	got := ExpandHome("~/projects")
 	want := filepath.Join(home, "projects")
 	if got != want {
 		t.Errorf("expected %s, got %s", want, got)
 	}
 
 	// Non-tilde paths should be unchanged.
-	got = expandHome("/absolute/path")
+	got = ExpandHome("/absolute/path")
 	if got != "/absolute/path" {
 		t.Errorf("expected /absolute/path, got %s", got)
 	}
