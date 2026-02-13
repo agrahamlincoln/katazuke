@@ -59,6 +59,10 @@ func findMergedInRepo(repoPath string) []MergedBranch {
 		return nil
 	}
 
+	if currentBranch == "" {
+		slog.Debug("repo has detached HEAD, no branch to exclude", "repo", repoName)
+	}
+
 	merged, err := git.MergedBranches(repoPath, defaultBranch)
 	if err != nil {
 		slog.Warn("skipping repo: could not list merged branches",

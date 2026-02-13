@@ -75,6 +75,27 @@ func TestFindOnMergedBranchDirty(t *testing.T) {
 	}
 }
 
+func TestFindOnMergedBranch_DetachedHEAD(t *testing.T) {
+	repo := helpers.NewTestRepo(t, "detached-head")
+
+	// Create and merge a feature branch.
+	repo.CreateBranch("feature/done")
+	repo.WriteFile("feature.txt", "feature work")
+	repo.AddFile("feature.txt")
+	repo.Commit("feature work")
+	repo.Checkout("main")
+	repo.Merge("feature/done")
+
+	// Detach HEAD -- not "on a merged branch", should return no results.
+	repo.DetachHead()
+
+	result := repos.FindOnMergedBranch([]string{repo.Path}, 1, nil)
+
+	if len(result) != 0 {
+		t.Fatalf("expected 0 results for detached HEAD, got %d", len(result))
+	}
+}
+
 func TestFindOnMergedBranchEmpty(t *testing.T) {
 	result := repos.FindOnMergedBranch(nil, 1, nil)
 	if len(result) != 0 {

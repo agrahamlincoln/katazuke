@@ -52,6 +52,10 @@ func checkMergedBranch(repoPath string) *MergedBranchRepo {
 		return nil
 	}
 
+	if currentBranch == "" {
+		return nil
+	}
+
 	defaultBranch, err := git.DefaultBranch(repoPath)
 	if err != nil {
 		slog.Debug("could not get default branch", "repo", name, "error", err)

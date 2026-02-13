@@ -607,6 +607,109 @@ func TestAll_MergedBranchSwitchThenPullFails(t *testing.T) {
 	}
 }
 
+func TestAll_DetachedHEAD_CleanCheckoutAndSync(t *testing.T) {
+	mock := defaultMock()
+	mock.currentBranch = ""
+	mock.isClean = true
+	opts := Options{Strategy: "rebase"}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Switched {
+		t.Errorf("expected Switched, got %d: %s", r.Status, r.Message)
+	}
+	if len(mock.checkoutCalls) != 1 || mock.checkoutCalls[0] != "main" {
+		t.Errorf("expected checkout to main, got %v", mock.checkoutCalls)
+	}
+	if len(mock.pullCalls) != 1 {
+		t.Errorf("expected 1 pull call, got %d", len(mock.pullCalls))
+	}
+	if !strings.Contains(r.Message, "detached HEAD") {
+		t.Errorf("expected message to mention detached HEAD, got %q", r.Message)
+	}
+}
+
+func TestAll_DetachedHEAD_DirtySkip(t *testing.T) {
+	mock := defaultMock()
+	mock.currentBranch = ""
+	mock.isClean = false
+	opts := Options{Strategy: "rebase"}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Skipped {
+		t.Errorf("expected Skipped, got %d: %s", r.Status, r.Message)
+	}
+	if len(mock.checkoutCalls) != 0 {
+		t.Error("should not checkout when working tree is dirty")
+	}
+}
+
+func TestAll_DetachedHEAD_DryRun(t *testing.T) {
+	mock := defaultMock()
+	mock.currentBranch = ""
+	mock.isClean = true
+	opts := Options{Strategy: "rebase", DryRun: true}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Skipped {
+		t.Errorf("expected Skipped for dry run, got %d: %s", r.Status, r.Message)
+	}
+	if len(mock.checkoutCalls) != 0 {
+		t.Error("should not checkout during dry run")
+	}
+	if len(mock.pullCalls) != 0 {
+		t.Error("should not pull during dry run")
+	}
+}
+
+func TestAll_DetachedHEAD_CheckoutFails(t *testing.T) {
+	mock := defaultMock()
+	mock.currentBranch = ""
+	mock.isClean = true
+	mock.checkoutErr = fmt.Errorf("checkout failed")
+	opts := Options{Strategy: "rebase"}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Failed {
+		t.Errorf("expected Failed, got %d: %s", r.Status, r.Message)
+	}
+}
+
+func TestAll_DetachedHEAD_PullFails(t *testing.T) {
+	mock := defaultMock()
+	mock.currentBranch = ""
+	mock.isClean = true
+	mock.pullErr = fmt.Errorf("pull failed")
+	opts := Options{Strategy: "rebase"}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Failed {
+		t.Errorf("expected Failed, got %d: %s", r.Status, r.Message)
+	}
+}
+
+func TestAll_DetachedHEAD_DoesNotCallIsMerged(t *testing.T) {
+	mock := defaultMock()
+	mock.currentBranch = ""
+	mock.isClean = true
+	opts := Options{Strategy: "rebase"}
+
+	All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	if len(mock.isMergedCalls) != 0 {
+		t.Errorf("expected no IsMerged calls for detached HEAD, got %v", mock.isMergedCalls)
+	}
+}
+
 func TestAll_DirtyAutoStashNothingStashed(t *testing.T) {
 	mock := defaultMock()
 	mock.isClean = false

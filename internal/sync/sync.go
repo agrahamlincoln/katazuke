@@ -117,6 +117,10 @@ func syncOne(repoPath string, opts Options, git GitOps) Result {
 		return result
 	}
 
+	if currentBranch == "" {
+		return syncDetachedHEAD(repoPath, repoName, defaultBranch, opts, git)
+	}
+
 	if currentBranch != defaultBranch {
 		return syncNonDefault(repoPath, repoName, currentBranch, defaultBranch, opts, git)
 	}
@@ -133,6 +137,48 @@ func syncOne(repoPath string, opts Options, git GitOps) Result {
 		return syncClean(repoPath, repoName, opts, git)
 	}
 	return syncDirty(repoPath, repoName, defaultBranch, opts, git)
+}
+
+func syncDetachedHEAD(repoPath, repoName, defaultBranch string, opts Options, git GitOps) Result {
+	result := Result{
+		RepoPath: repoPath,
+		RepoName: repoName,
+	}
+
+	clean, err := git.IsClean(repoPath)
+	if err != nil {
+		result.Status = Failed
+		result.Message = fmt.Sprintf("could not check working tree: %v", err)
+		return result
+	}
+
+	if !clean {
+		result.Status = Skipped
+		result.Message = "detached HEAD with dirty working tree"
+		return result
+	}
+
+	if opts.DryRun {
+		result.Status = Skipped
+		result.Message = fmt.Sprintf("would switch from detached HEAD to %s and sync (dry run)", defaultBranch)
+		return result
+	}
+
+	slog.Debug("switching from detached HEAD", "repo", repoName, "to", defaultBranch)
+	if err := git.Checkout(repoPath, defaultBranch); err != nil {
+		result.Status = Failed
+		result.Message = fmt.Sprintf("could not switch to %s: %v", defaultBranch, err)
+		return result
+	}
+
+	pullResult := syncClean(repoPath, repoName, opts, git)
+	if pullResult.Status == Failed {
+		return pullResult
+	}
+
+	result.Status = Switched
+	result.Message = fmt.Sprintf("switched from detached HEAD to %s and synced", defaultBranch)
+	return result
 }
 
 func syncNonDefault(repoPath, repoName, currentBranch, defaultBranch string, opts Options, git GitOps) Result {

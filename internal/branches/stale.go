@@ -111,6 +111,10 @@ func findStaleInRepo(repoPath string, cutoff time.Time) []StaleBranch {
 		return nil
 	}
 
+	if currentBranch == "" {
+		slog.Debug("repo has detached HEAD, no branch to exclude", "repo", repoName)
+	}
+
 	allBranches, err := git.ListBranches(repoPath)
 	if err != nil {
 		slog.Warn("skipping repo: could not list branches",

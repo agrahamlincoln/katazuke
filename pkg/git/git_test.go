@@ -34,6 +34,19 @@ func TestCurrentBranch(t *testing.T) {
 	}
 }
 
+func TestCurrentBranch_DetachedHEAD(t *testing.T) {
+	repo := helpers.NewTestRepo(t, "detached-head")
+	repo.DetachHead()
+
+	branch, err := git.CurrentBranch(repo.Path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if branch != "" {
+		t.Errorf("expected empty string for detached HEAD, got %q", branch)
+	}
+}
+
 func TestDefaultBranch(t *testing.T) {
 	repo := helpers.NewTestRepo(t, "default-branch")
 	branch, err := git.DefaultBranch(repo.Path)

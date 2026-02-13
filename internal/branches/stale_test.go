@@ -180,6 +180,33 @@ func TestFindStale_MultipleRepos(t *testing.T) {
 	}
 }
 
+func TestFindStale_DetachedHEAD(t *testing.T) {
+	repo := helpers.NewTestRepo(t, "detached-head")
+
+	staleDate := time.Now().Add(-60 * 24 * time.Hour)
+	repo.CreateBranch("feature/old")
+	repo.WriteFile("old.txt", "old work")
+	repo.AddFile("old.txt")
+	repo.CommitWithDate("old commit", staleDate)
+	repo.Checkout("main")
+
+	// Detach HEAD.
+	repo.DetachHead()
+
+	results, err := branches.FindStale([]string{repo.Path}, 30*24*time.Hour, 1, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// feature/old should still appear as stale; detached HEAD should not
+	// cause an error or exclude any valid branch.
+	if len(results) != 1 {
+		t.Fatalf("expected 1 stale branch, got %d", len(results))
+	}
+	if results[0].Branch != "feature/old" {
+		t.Errorf("expected feature/old, got %q", results[0].Branch)
+	}
+}
+
 func TestFindStale_CommitsAheadBehind(t *testing.T) {
 	repo := helpers.NewTestRepo(t, "ahead-behind")
 

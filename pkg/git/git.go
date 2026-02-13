@@ -69,7 +69,7 @@ func ListBranches(repoPath string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return splitNonEmpty(out), nil
+	return filterBranches(splitNonEmpty(out)), nil
 }
 
 // MergedBranches returns local branches that have been merged into the given base branch.
@@ -78,7 +78,21 @@ func MergedBranches(repoPath, base string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return splitNonEmpty(out), nil
+	return filterBranches(splitNonEmpty(out)), nil
+}
+
+// filterBranches removes pseudo-branch entries from git branch output.
+// When HEAD is detached, git includes a "(HEAD detached at ...)" entry in
+// branch listings even with --format=%(refname:short). These are not real
+// branch names and must be excluded.
+func filterBranches(branches []string) []string {
+	result := make([]string, 0, len(branches))
+	for _, b := range branches {
+		if !strings.HasPrefix(b, "(") {
+			result = append(result, b)
+		}
+	}
+	return result
 }
 
 // IsMerged returns true if the given branch has been merged into base.

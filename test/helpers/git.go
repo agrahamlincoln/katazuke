@@ -101,6 +101,12 @@ func (r *TestRepo) Merge(branch string) {
 	r.run("merge", "--no-ff", branch, "-m", fmt.Sprintf("Merge branch '%s'", branch))
 }
 
+// DetachHead detaches HEAD at the current commit.
+func (r *TestRepo) DetachHead() {
+	r.t.Helper()
+	r.run("checkout", "--detach", "HEAD")
+}
+
 // AddRemote adds a remote to the repository
 func (r *TestRepo) AddRemote(name, url string) {
 	r.t.Helper()

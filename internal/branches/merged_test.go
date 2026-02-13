@@ -290,6 +290,34 @@ func TestFindMerged_HasRemoteFalseWithoutOrigin(t *testing.T) {
 	}
 }
 
+func TestFindMerged_DetachedHEAD(t *testing.T) {
+	repo := helpers.NewTestRepo(t, "detached-head")
+
+	// Create and merge a feature branch.
+	repo.CreateBranch("feature/done")
+	repo.WriteFile("done.txt", "done")
+	repo.AddFile("done.txt")
+	repo.Commit("done commit")
+	repo.Checkout("main")
+	repo.Merge("feature/done")
+
+	// Detach HEAD.
+	repo.DetachHead()
+
+	results, err := branches.FindMerged([]string{repo.Path}, 1, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// feature/done should still appear as merged; detached HEAD should not
+	// cause an error or exclude any valid branch.
+	if len(results) != 1 {
+		t.Fatalf("expected 1 merged branch, got %d", len(results))
+	}
+	if results[0].Branch != "feature/done" {
+		t.Errorf("expected feature/done, got %q", results[0].Branch)
+	}
+}
+
 // gitRun is a test helper that runs a git command in the given directory.
 func gitRun(t *testing.T, dir string, args ...string) {
 	t.Helper()
