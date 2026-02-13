@@ -485,31 +485,29 @@ func progressPrinter() func(completed, total int) {
 // promptAndExecuteStaleActions categorizes stale branches into safety tiers,
 // presents a multi-select per tier, and deletes the selected branches.
 func promptAndExecuteStaleActions(stale []branches.StaleBranch, ml *metrics.Logger) error {
-	// Categorize branches into safety tiers.
-	// Own branches with remotes are safest (work exists elsewhere).
-	// Local-only and other-author branches go to "Needs review" because
-	// local-only branches may have unpushed work and other-author branches
-	// may not belong to us.
-	var safe, automation, review []branches.StaleBranch
-	for _, s := range stale {
-		switch {
-		case s.IsAutomation:
-			automation = append(automation, s)
-		case s.HasRemote && s.IsOwnBranch:
-			safe = append(safe, s)
-		default:
-			review = append(review, s)
-		}
-	}
+	safe, automation, review := categorizeStaleBranches(stale)
 
 	tiers := []struct {
-		title     string
-		branches  []branches.StaleBranch
-		preselect bool
+		title       string
+		description string
+		branches    []branches.StaleBranch
+		preselect   bool
 	}{
-		{"Safe to delete", safe, true},
-		{"Automation branches", automation, true},
-		{"Needs review", review, false},
+		{
+			"Safe to delete",
+			"Your branches that also exist on the remote. No work will be lost.",
+			safe, true,
+		},
+		{
+			"Automation branches",
+			"Created by tools like Dependabot or Renovate. The remote tool manages these.",
+			automation, true,
+		},
+		{
+			"Needs review",
+			"Local-only or other-author branches. Check before deleting -- work may not exist elsewhere.",
+			review, false,
+		},
 	}
 
 	var selected []branches.StaleBranch
@@ -517,7 +515,7 @@ func promptAndExecuteStaleActions(stale []branches.StaleBranch, ml *metrics.Logg
 		if len(tier.branches) == 0 {
 			continue
 		}
-		tierSelected, err := promptTierSelection(tier.title, tier.branches, tier.preselect)
+		tierSelected, err := promptTierSelection(tier.title, tier.description, tier.branches, tier.preselect)
 		if err != nil {
 			return err
 		}
@@ -548,9 +546,28 @@ func promptAndExecuteStaleActions(stale []branches.StaleBranch, ml *metrics.Logg
 	return executeStaleDeletes(selected, deleteRemote)
 }
 
+// categorizeStaleBranches groups branches into safety tiers for the
+// multi-select UI. Automation branches are always in their own tier
+// regardless of other properties. Own branches with remotes are "safe"
+// because the work exists elsewhere. Everything else (local-only,
+// other-author) needs manual review.
+func categorizeStaleBranches(stale []branches.StaleBranch) (safe, automation, review []branches.StaleBranch) {
+	for _, s := range stale {
+		switch {
+		case s.IsAutomation:
+			automation = append(automation, s)
+		case s.HasRemote && s.IsOwnBranch:
+			safe = append(safe, s)
+		default:
+			review = append(review, s)
+		}
+	}
+	return
+}
+
 // promptTierSelection presents a multi-select for a single tier of stale
 // branches. Returns the branches the user selected for deletion.
-func promptTierSelection(title string, tier []branches.StaleBranch, preselect bool) ([]branches.StaleBranch, error) {
+func promptTierSelection(title, description string, tier []branches.StaleBranch, preselect bool) ([]branches.StaleBranch, error) {
 	options := make([]huh.Option[int], len(tier))
 	for i, s := range tier {
 		options[i] = huh.NewOption(staleBranchLabel(s), i).Selected(preselect)
@@ -561,6 +578,7 @@ func promptTierSelection(title string, tier []branches.StaleBranch, preselect bo
 		huh.NewGroup(
 			huh.NewMultiSelect[int]().
 				Title(title).
+				Description(description).
 				Options(options...).
 				Value(&selectedIndices),
 		),
@@ -611,7 +629,8 @@ func promptForStaleRemoteDeletion(selected []branches.StaleBranch) (bool, error)
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
-				Title("Also delete remote branches on origin (where safe)?").
+				Title("Also delete remote branches on origin?").
+				Description("Only your own branches will be deleted remotely. Automation and other-author branches are skipped.").
 				Value(&deleteRemote),
 		),
 	)
