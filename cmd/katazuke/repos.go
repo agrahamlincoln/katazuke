@@ -91,7 +91,7 @@ func (c *ReposCmd) runAll(globals *CLI) error {
 	_ = ml.LogCommand("repos", flags)
 
 	bold := color.New(color.Bold)
-	workers := cfg.Sync.Workers
+	workers := cfg.Workers
 	slog.Debug("using worker pool", "workers", workers)
 
 	scanStart := time.Now()
@@ -168,7 +168,7 @@ func (c *ReposCmd) runMerged(globals *CLI) error {
 	}
 	_ = ml.LogCommand("repos --merged", flags)
 
-	workers := cfg.Sync.Workers
+	workers := cfg.Workers
 	slog.Debug("using worker pool", "workers", workers)
 	fmt.Printf("Checking %d repositories for merged branches...\n", len(repoPaths))
 
@@ -211,7 +211,7 @@ func (c *ReposCmd) runArchived(globals *CLI) error {
 	}
 	_ = ml.LogCommand("repos --archived", flags)
 
-	workers := cfg.Sync.Workers
+	workers := cfg.Workers
 	slog.Debug("using worker pool", "workers", workers)
 
 	scanStart := time.Now()

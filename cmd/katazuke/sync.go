@@ -80,7 +80,7 @@ func (c *SyncCmd) Run(globals *CLI) error {
 		Verbose:            globals.Verbose,
 	}
 
-	workers := cfg.Sync.Workers
+	workers := cfg.Workers
 	slog.Debug("using worker pool", "workers", workers)
 	fmt.Printf("Syncing %d repositories...\n\n", len(repoPaths))
 

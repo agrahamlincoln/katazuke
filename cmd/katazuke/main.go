@@ -16,6 +16,7 @@ import (
 	"github.com/agrahamlincoln/katazuke/internal/config"
 	ghclient "github.com/agrahamlincoln/katazuke/internal/github"
 	"github.com/agrahamlincoln/katazuke/internal/metrics"
+	"github.com/agrahamlincoln/katazuke/internal/parallel"
 	"github.com/agrahamlincoln/katazuke/internal/scanner"
 	"github.com/agrahamlincoln/katazuke/pkg/git"
 )
@@ -105,7 +106,7 @@ func (c *BranchesCmd) runMerged(globals *CLI) error {
 
 	slog.Debug("found repositories", "count", len(repos))
 
-	workers := cfg.Sync.Workers
+	workers := cfg.Workers
 	slog.Debug("using worker pool", "workers", workers)
 	fmt.Printf("Scanning %d repositories for merged branches...\n", len(repos))
 
@@ -322,7 +323,7 @@ func (c *BranchesCmd) runStale(globals *CLI) error {
 
 	slog.Debug("found repositories", "count", len(repos))
 
-	workers := cfg.Sync.Workers
+	workers := cfg.Workers
 	slog.Debug("using worker pool", "workers", workers)
 	fmt.Printf("Scanning %d repositories for stale branches...\n", len(repos))
 
@@ -335,7 +336,7 @@ func (c *BranchesCmd) runStale(globals *CLI) error {
 
 	// Filter out branches with open PRs using GitHub API.
 	gh := ghclient.NewClient(cfg.GithubToken)
-	stale = filterByPRStatus(stale, gh)
+	stale = filterByPRStatus(stale, gh, workers)
 
 	if len(stale) == 0 {
 		fmt.Println("No stale branches found.")
@@ -351,53 +352,66 @@ func (c *BranchesCmd) runStale(globals *CLI) error {
 	return promptAndExecuteStaleActions(stale, ml)
 }
 
+// prCheckResult pairs a stale branch with the outcome of its PR status check.
+type prCheckResult struct {
+	branch  branches.StaleBranch
+	exclude bool
+}
+
 // filterByPRStatus uses the GitHub API to exclude branches with open PRs
 // from the stale list. Branches whose PRs were merged are kept as cleanup
 // candidates. API failures are logged but do not prevent the branch from
 // appearing in results (fail-open).
-func filterByPRStatus(stale []branches.StaleBranch, gh *ghclient.Client) []branches.StaleBranch {
+func filterByPRStatus(stale []branches.StaleBranch, gh *ghclient.Client, workers int) []branches.StaleBranch {
 	slog.Debug("checking PR status for stale branches", "count", len(stale))
 
 	dim := color.New(color.FgHiBlack)
 	fmt.Printf("Checking PR status for %d branches...\n", len(stale))
 
-	filtered := make([]branches.StaleBranch, 0, len(stale))
-	for i, s := range stale {
-		fmt.Printf("%s  %s", clearLine, dim.Sprintf("[%d/%d]", i+1, len(stale)))
+	results := parallel.Run(stale, workers, func(s branches.StaleBranch) prCheckResult {
 		if !s.HasRemote {
-			filtered = append(filtered, s)
-			continue
+			return prCheckResult{branch: s}
 		}
 
 		remote, err := git.RemoteURL(s.RepoPath, "origin")
 		if err != nil {
-			filtered = append(filtered, s)
-			continue
+			return prCheckResult{branch: s}
 		}
 
 		owner, repo, ok := ghclient.ParseGitHubRemote(remote)
 		if !ok {
-			filtered = append(filtered, s)
-			continue
+			return prCheckResult{branch: s}
 		}
 
 		prState, err := gh.BranchPRState(owner, repo, s.Branch)
 		if err != nil {
 			slog.Debug("could not check PR status, keeping branch in results",
 				"repo", s.RepoName, "branch", s.Branch, "error", err)
-			filtered = append(filtered, s)
-			continue
+			return prCheckResult{branch: s}
 		}
 
 		if prState == ghclient.PRStateOpen {
 			slog.Debug("excluding branch with open PR",
 				"repo", s.RepoName, "branch", s.Branch)
-			continue
+			return prCheckResult{branch: s, exclude: true}
 		}
 
-		filtered = append(filtered, s)
+		return prCheckResult{branch: s}
+	}, func(completed, total int, _ prCheckResult) {
+		remaining := total - completed
+		if remaining > 0 {
+			fmt.Printf("%s  %s", clearLine, dim.Sprintf("[%d/%d]", completed, total))
+		} else {
+			fmt.Print(clearLine)
+		}
+	})
+
+	filtered := make([]branches.StaleBranch, 0, len(stale))
+	for _, r := range results {
+		if !r.exclude {
+			filtered = append(filtered, r.branch)
+		}
 	}
-	fmt.Print(clearLine)
 	return filtered
 }
 

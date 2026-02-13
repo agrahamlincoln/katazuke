@@ -19,7 +19,8 @@ type SyncConfig struct {
 	SkipDirty          bool   `yaml:"skip_dirty"`           // skip dirty repos without merge-tree check
 	AutoStash          bool   `yaml:"auto_stash"`           // attempt stash/pop for dirty repos
 	SwitchMergedBranch bool   `yaml:"switch_merged_branch"` // auto-switch repos on merged branches to default
-	Workers            int    `yaml:"workers"`              // number of parallel workers
+	// Deprecated: Use the top-level Workers field in Config instead.
+	Workers int `yaml:"workers"`
 }
 
 // Config holds all katazuke configuration.
@@ -28,6 +29,7 @@ type Config struct {
 	StaleThresholdDays int        `yaml:"stale_threshold_days"`
 	GithubToken        string     `yaml:"github_token"`
 	ExcludePatterns    []string   `yaml:"exclude_patterns"`
+	Workers            int        `yaml:"workers"` // parallel worker count for all commands
 	Sync               SyncConfig `yaml:"sync"`
 }
 
@@ -38,12 +40,12 @@ func Defaults() Config {
 		ProjectsDir:        filepath.Join(home, "projects"),
 		StaleThresholdDays: 30,
 		ExcludePatterns:    []string{".archive", "vendor"},
+		Workers:            min(4, runtime.NumCPU()),
 		Sync: SyncConfig{
 			Strategy:           "rebase",
 			SkipDirty:          false,
 			AutoStash:          true,
 			SwitchMergedBranch: true,
-			Workers:            min(4, runtime.NumCPU()),
 		},
 	}
 }
@@ -52,9 +54,19 @@ func Defaults() Config {
 // Values are layered: defaults < config file < environment variables.
 func Load() (Config, error) {
 	cfg := Defaults()
+	defaultWorkers := cfg.Workers
 
 	if err := loadFile(&cfg); err != nil {
 		return cfg, err
+	}
+
+	// Migrate deprecated sync.workers from config file to top-level.
+	// Sync.Workers defaults to 0, so any non-zero value was set in the file.
+	// Only promote when top-level workers wasn't also explicitly changed.
+	// Limitation: if the user explicitly sets workers to the default value
+	// AND sets sync.workers to something different, sync.workers wins.
+	if cfg.Sync.Workers > 0 && cfg.Workers == defaultWorkers {
+		cfg.Workers = cfg.Sync.Workers
 	}
 
 	applyEnv(&cfg)
@@ -143,6 +155,12 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("KATAZUKE_SYNC_WORKERS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.Sync.Workers = n
+			cfg.Workers = n // backward compat: promote to top-level
+		}
+	}
+	if v := os.Getenv("KATAZUKE_WORKERS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Workers = n
 		}
 	}
 }

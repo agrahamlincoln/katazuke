@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -30,8 +31,11 @@ func TestDefaults(t *testing.T) {
 		t.Error("expected sync switch_merged_branch to be true by default")
 	}
 	expectedWorkers := min(4, runtime.NumCPU())
-	if cfg.Sync.Workers != expectedWorkers {
-		t.Errorf("expected sync workers %d, got %d", expectedWorkers, cfg.Sync.Workers)
+	if cfg.Workers != expectedWorkers {
+		t.Errorf("expected workers %d, got %d", expectedWorkers, cfg.Workers)
+	}
+	if cfg.Sync.Workers != 0 {
+		t.Errorf("expected deprecated sync workers 0, got %d", cfg.Sync.Workers)
 	}
 }
 
@@ -143,8 +147,8 @@ func TestSyncConfigFromFile(t *testing.T) {
 	if cfg.Sync.SwitchMergedBranch {
 		t.Error("expected switch_merged_branch to be false")
 	}
-	if cfg.Sync.Workers != 8 {
-		t.Errorf("expected workers 8, got %d", cfg.Sync.Workers)
+	if cfg.Workers != 8 {
+		t.Errorf("expected workers 8 (promoted from sync.workers), got %d", cfg.Workers)
 	}
 }
 
@@ -172,8 +176,8 @@ func TestSyncEnvOverrides(t *testing.T) {
 	if cfg.Sync.SwitchMergedBranch {
 		t.Error("expected switch_merged_branch to be false")
 	}
-	if cfg.Sync.Workers != 16 {
-		t.Errorf("expected workers 16, got %d", cfg.Sync.Workers)
+	if cfg.Workers != 16 {
+		t.Errorf("expected workers 16 (promoted from KATAZUKE_SYNC_WORKERS), got %d", cfg.Workers)
 	}
 }
 
@@ -210,6 +214,146 @@ func TestInvalidSyncStrategyFromEnv(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid sync strategy") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestTopLevelWorkersFromFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	configDir := filepath.Join(dir, "katazuke")
+	if err := os.MkdirAll(configDir, 0750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(
+		"workers: 12\n",
+	), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Workers != 12 {
+		t.Errorf("expected workers 12, got %d", cfg.Workers)
+	}
+}
+
+func TestWorkersBackwardCompat(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	configDir := filepath.Join(dir, "katazuke")
+	if err := os.MkdirAll(configDir, 0750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Old-style config: only sync.workers set.
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(
+		"sync:\n  workers: 10\n",
+	), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Workers != 10 {
+		t.Errorf("expected workers 10 (promoted from sync.workers), got %d", cfg.Workers)
+	}
+}
+
+func TestWorkersPrecedence(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	configDir := filepath.Join(dir, "katazuke")
+	if err := os.MkdirAll(configDir, 0750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Both set: top-level should win.
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(
+		"workers: 6\nsync:\n  workers: 10\n",
+	), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Workers != 6 {
+		t.Errorf("expected workers 6 (top-level wins), got %d", cfg.Workers)
+	}
+}
+
+func TestWorkersPrecedenceEdgeCase(t *testing.T) {
+	// Known limitation: when top-level workers is explicitly set to the
+	// default value, migration from sync.workers still fires because we
+	// cannot distinguish "absent" from "set to default" after YAML parsing.
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	defaultWorkers := Defaults().Workers
+
+	configDir := filepath.Join(dir, "katazuke")
+	if err := os.MkdirAll(configDir, 0750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	yaml := fmt.Sprintf("workers: %d\nsync:\n  workers: 10\n", defaultWorkers)
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(yaml), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// sync.workers wins because we can't detect that top-level was explicitly
+	// set when its value matches the default.
+	if cfg.Workers != 10 {
+		t.Errorf("expected workers 10 (sync.workers promoted due to default-matching edge case), got %d", cfg.Workers)
+	}
+}
+
+func TestWorkersEnvVar(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("KATAZUKE_WORKERS", "20")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Workers != 20 {
+		t.Errorf("expected workers 20, got %d", cfg.Workers)
+	}
+}
+
+func TestWorkersEnvVarPrecedence(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("KATAZUKE_SYNC_WORKERS", "8")
+	t.Setenv("KATAZUKE_WORKERS", "12")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Workers != 12 {
+		t.Errorf("expected workers 12 (KATAZUKE_WORKERS wins), got %d", cfg.Workers)
+	}
+}
+
+func TestSyncWorkersEnvFallback(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("KATAZUKE_SYNC_WORKERS", "8")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Workers != 8 {
+		t.Errorf("expected workers 8 (from KATAZUKE_SYNC_WORKERS fallback), got %d", cfg.Workers)
 	}
 }
 
