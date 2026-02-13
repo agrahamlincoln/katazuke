@@ -136,18 +136,19 @@
    - Last commit date and message
    - Commits ahead/behind main
    - Remote branch status
-4. User chooses action per branch:
-   - Delete (local and remote)
-   - Keep working (checkout)
-   - Archive (tag and delete)
-   - Ignore (add to config)
-5. Tool executes actions with confirmation
+4. Branches are categorized into safety tiers:
+   - Safe to delete (own branches with remotes)
+   - Automation (dependabot, renovate, etc.)
+   - Needs review (local-only, other-author, etc.)
+5. User selects branches to delete via multi-select per tier
+   - Safe and automation tiers are pre-selected
+   - Needs-review tier requires explicit selection
+6. Optional: delete remote branches on origin (where safe)
 
 **Success Criteria**:
 - Configurable staleness threshold (default: 30 days)
 - Never deletes branches with unpushed commits
-- Provides easy way to resume work
-- Supports archiving branches as tags
+- Tiered multi-select scales to hundreds of branches
 
 ## Technical Requirements
 

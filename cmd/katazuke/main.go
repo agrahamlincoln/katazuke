@@ -417,19 +417,7 @@ func printStaleSummary(stale []branches.StaleBranch) {
 		age := formatAge(s.LastCommit)
 		subject := truncate(s.LastCommitMessage, maxCommitSummaryLen)
 
-		var tags []string
-		if s.HasRemote {
-			tags = append(tags, "remote")
-		}
-		if s.IsLocalOnly {
-			tags = append(tags, "local-only")
-		}
-		if s.IsAutomation {
-			tags = append(tags, "automation")
-		}
-		if !s.IsOwnBranch {
-			tags = append(tags, "other-author")
-		}
+		tags := staleTags(s)
 		tagStr := ""
 		if len(tags) > 0 {
 			tagStr = " [" + strings.Join(tags, ", ") + "]"
@@ -452,11 +440,28 @@ func printStaleSummary(stale []branches.StaleBranch) {
 	fmt.Println()
 }
 
-// Maximum characters for commit message display in different contexts.
-const (
-	maxCommitSummaryLen     = 50
-	maxCommitDescriptionLen = 40
-)
+// staleTags returns the display tags for a stale branch based on its
+// remote status, automation origin, and authorship.
+func staleTags(s branches.StaleBranch) []string {
+	var tags []string
+	if s.HasRemote {
+		tags = append(tags, "remote")
+	}
+	if s.IsLocalOnly {
+		tags = append(tags, "local-only")
+	}
+	if s.IsAutomation {
+		tags = append(tags, "automation")
+	}
+	if !s.IsOwnBranch {
+		tags = append(tags, "other-author")
+	}
+	return tags
+}
+
+// maxCommitSummaryLen is the maximum characters for commit messages in the
+// stale branch summary view.
+const maxCommitSummaryLen = 50
 
 // clearLine is the ANSI escape sequence to move the cursor to the start
 // of the line and erase its contents.
@@ -477,49 +482,143 @@ func progressPrinter() func(completed, total int) {
 	}
 }
 
-// staleAction represents a user-selected action for a stale branch.
-type staleAction string
-
-const (
-	staleActionDelete  staleAction = "delete"
-	staleActionKeep    staleAction = "keep"
-	staleActionArchive staleAction = "archive"
-)
-
+// promptAndExecuteStaleActions categorizes stale branches into safety tiers,
+// presents a multi-select per tier, and deletes the selected branches.
 func promptAndExecuteStaleActions(stale []branches.StaleBranch, ml *metrics.Logger) error {
-	actions := make(map[int]staleAction, len(stale))
-
-	for i, s := range stale {
-		var action staleAction
-		form := huh.NewForm(
-			huh.NewGroup(
-				huh.NewSelect[staleAction]().
-					Title(s.Label()).
-					Description(fmt.Sprintf("%s (%s, +%d/-%d)",
-						truncate(s.LastCommitMessage, maxCommitDescriptionLen),
-						formatAge(s.LastCommit),
-						s.CommitsAhead, s.CommitsBehind)).
-					Options(
-						huh.NewOption("Delete", staleActionDelete),
-						huh.NewOption("Keep", staleActionKeep),
-						huh.NewOption("Archive (tag + delete)", staleActionArchive),
-					).
-					Value(&action),
-			),
-		)
-		if err := form.Run(); err != nil {
-			return fmt.Errorf("prompt failed: %w", err)
+	// Categorize branches into safety tiers.
+	// Own branches with remotes are safest (work exists elsewhere).
+	// Local-only and other-author branches go to "Needs review" because
+	// local-only branches may have unpushed work and other-author branches
+	// may not belong to us.
+	var safe, automation, review []branches.StaleBranch
+	for _, s := range stale {
+		switch {
+		case s.IsAutomation:
+			automation = append(automation, s)
+		case s.HasRemote && s.IsOwnBranch:
+			safe = append(safe, s)
+		default:
+			review = append(review, s)
 		}
-		actions[i] = action
-
-		// Log the suggestion: accepted means delete or archive (actionable).
-		fp := branchFingerprint(s.RepoPath, s.Branch)
-		ageDays := int(time.Since(s.LastCommit).Hours() / 24)
-		accepted := action == staleActionDelete || action == staleActionArchive
-		_ = ml.LogSuggestion("delete_stale_branch", fp, accepted, ageDays)
 	}
 
-	return executeStaleActions(stale, actions)
+	tiers := []struct {
+		title     string
+		branches  []branches.StaleBranch
+		preselect bool
+	}{
+		{"Safe to delete", safe, true},
+		{"Automation branches", automation, true},
+		{"Needs review", review, false},
+	}
+
+	var selected []branches.StaleBranch
+	for _, tier := range tiers {
+		if len(tier.branches) == 0 {
+			continue
+		}
+		tierSelected, err := promptTierSelection(tier.title, tier.branches, tier.preselect)
+		if err != nil {
+			return err
+		}
+		selected = append(selected, tierSelected...)
+	}
+
+	// Log metrics for all branches.
+	selectedSet := make(map[string]bool, len(selected))
+	for _, s := range selected {
+		selectedSet[s.RepoPath+":"+s.Branch] = true
+	}
+	for _, s := range stale {
+		fp := branchFingerprint(s.RepoPath, s.Branch)
+		ageDays := int(time.Since(s.LastCommit).Hours() / 24)
+		_ = ml.LogSuggestion("delete_stale_branch", fp, selectedSet[s.RepoPath+":"+s.Branch], ageDays)
+	}
+
+	if len(selected) == 0 {
+		fmt.Println("No branches selected for deletion.")
+		return nil
+	}
+
+	deleteRemote, err := promptForStaleRemoteDeletion(selected)
+	if err != nil {
+		return err
+	}
+
+	return executeStaleDeletes(selected, deleteRemote)
+}
+
+// promptTierSelection presents a multi-select for a single tier of stale
+// branches. Returns the branches the user selected for deletion.
+func promptTierSelection(title string, tier []branches.StaleBranch, preselect bool) ([]branches.StaleBranch, error) {
+	options := make([]huh.Option[int], len(tier))
+	for i, s := range tier {
+		options[i] = huh.NewOption(staleBranchLabel(s), i).Selected(preselect)
+	}
+
+	var selectedIndices []int
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewMultiSelect[int]().
+				Title(title).
+				Options(options...).
+				Value(&selectedIndices),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return nil, fmt.Errorf("prompt failed: %w", err)
+	}
+
+	result := make([]branches.StaleBranch, len(selectedIndices))
+	for i, idx := range selectedIndices {
+		result[i] = tier[idx]
+	}
+	return result, nil
+}
+
+// staleBranchLabel builds a display label for a stale branch option including
+// commit subject, age, commit delta, and status tags.
+func staleBranchLabel(s branches.StaleBranch) string {
+	age := formatAge(s.LastCommit)
+	subject := truncate(s.LastCommitMessage, maxCommitSummaryLen)
+
+	tags := staleTags(s)
+	tagStr := ""
+	if len(tags) > 0 {
+		tagStr = fmt.Sprintf("  [%s]", strings.Join(tags, ", "))
+	}
+
+	return fmt.Sprintf("%s: %s  (%s)  %s  +%d/-%d%s",
+		s.RepoName, s.Branch, age, subject, s.CommitsAhead, s.CommitsBehind, tagStr)
+}
+
+// promptForStaleRemoteDeletion asks whether to also delete remote branches
+// when any of the selected stale branches have a remote that is safe to delete.
+func promptForStaleRemoteDeletion(selected []branches.StaleBranch) (bool, error) {
+	hasRemote := false
+	for _, s := range selected {
+		if s.HasRemote && safeToDeleteRemote(s) {
+			hasRemote = true
+			break
+		}
+	}
+	if !hasRemote {
+		return false, nil
+	}
+
+	var deleteRemote bool
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Also delete remote branches on origin (where safe)?").
+				Value(&deleteRemote),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return false, fmt.Errorf("prompt failed: %w", err)
+	}
+	return deleteRemote, nil
 }
 
 // safeToDeleteRemote returns true if the branch can safely have its remote
@@ -529,88 +628,53 @@ func safeToDeleteRemote(s branches.StaleBranch) bool {
 	return !s.IsAutomation && s.IsOwnBranch
 }
 
-// deleteRemoteIfSafe attempts to delete the remote branch if it exists and
-// passes safety checks. Skips silently if the branch has no remote or fails
-// safety checks.
-func deleteRemoteIfSafe(s branches.StaleBranch) error {
-	if !s.HasRemote {
-		return nil
-	}
-	if !safeToDeleteRemote(s) {
-		fmt.Printf("  skipped remote deletion for %s in %s (automation or other-author)\n", s.Branch, s.RepoName)
-		return nil
-	}
-	if err := git.DeleteRemoteBranch(s.RepoPath, "origin", s.Branch); err != nil {
-		return err
-	}
-	fmt.Printf("  deleted remote %s in %s\n", s.Branch, s.RepoName)
-	return nil
-}
-
-func executeStaleActions(stale []branches.StaleBranch, actions map[int]staleAction) error {
+// executeStaleDeletes deletes the selected stale branches locally, and
+// optionally their remote counterparts where safe.
+func executeStaleDeletes(selected []branches.StaleBranch, deleteRemote bool) error {
 	bold := color.New(color.Bold)
 	var failures []string
-	deleted, archived, kept := 0, 0, 0
+	var remoteFailures []string
 
-	for i, s := range stale {
-		action := actions[i]
-		switch action {
-		case staleActionKeep:
-			kept++
+	for _, s := range selected {
+		slog.Debug("deleting branch", "repo", s.RepoName, "branch", s.Branch)
+		if err := git.DeleteLocalBranch(s.RepoPath, s.Branch, true); err != nil {
+			fmt.Printf("  failed to delete %s in %s: %v\n", s.Branch, s.RepoName, err)
+			failures = append(failures, s.Label())
 			continue
+		}
+		fmt.Printf("  deleted %s in %s\n", s.Branch, s.RepoName)
 
-		case staleActionArchive:
-			tagName := "archive/" + s.Branch
-			if err := git.CreateTag(s.RepoPath, tagName, s.Branch); err != nil {
-				fmt.Printf("  failed to create tag %s in %s: %v\n", tagName, s.RepoName, err)
-				failures = append(failures, s.Label())
-				continue
-			}
-			fmt.Printf("  created tag %s in %s\n", tagName, s.RepoName)
-
-			if err := git.DeleteLocalBranch(s.RepoPath, s.Branch, true); err != nil {
-				fmt.Printf("  failed to delete local %s in %s: %v\n", s.Branch, s.RepoName, err)
-				failures = append(failures, s.Label())
-				continue
-			}
-			fmt.Printf("  deleted local %s in %s\n", s.Branch, s.RepoName)
-
-			if err := deleteRemoteIfSafe(s); err != nil {
+		if deleteRemote && s.HasRemote && safeToDeleteRemote(s) {
+			if err := git.DeleteRemoteBranch(s.RepoPath, "origin", s.Branch); err != nil {
 				fmt.Printf("  failed to delete remote %s in %s: %v\n", s.Branch, s.RepoName, err)
-				failures = append(failures, s.Label())
+				remoteFailures = append(remoteFailures, s.Label())
 				continue
 			}
-			archived++
-
-		case staleActionDelete:
-			if err := git.DeleteLocalBranch(s.RepoPath, s.Branch, true); err != nil {
-				fmt.Printf("  failed to delete %s in %s: %v\n", s.Branch, s.RepoName, err)
-				failures = append(failures, s.Label())
-				continue
-			}
-			fmt.Printf("  deleted %s in %s\n", s.Branch, s.RepoName)
-
-			if err := deleteRemoteIfSafe(s); err != nil {
-				fmt.Printf("  failed to delete remote %s in %s: %v\n", s.Branch, s.RepoName, err)
-				failures = append(failures, s.Label())
-				continue
-			}
-			deleted++
+			fmt.Printf("  deleted remote %s in %s\n", s.Branch, s.RepoName)
 		}
 	}
 
 	fmt.Println()
+	deleted := len(selected) - len(failures)
 	if deleted > 0 {
 		fmt.Println(bold.Sprintf("Deleted %d branch(es).", deleted))
 	}
-	if archived > 0 {
-		fmt.Println(bold.Sprintf("Archived %d branch(es).", archived))
+	if deleteRemote {
+		remoteCount := 0
+		for _, s := range selected {
+			if s.HasRemote && safeToDeleteRemote(s) {
+				remoteCount++
+			}
+		}
+		remoteDeleted := remoteCount - len(remoteFailures)
+		if remoteDeleted > 0 {
+			fmt.Println(bold.Sprintf("Deleted %d remote branch(es).", remoteDeleted))
+		}
 	}
-	if kept > 0 {
-		fmt.Println(bold.Sprintf("Kept %d branch(es).", kept))
-	}
+
+	failures = append(failures, remoteFailures...)
 	if len(failures) > 0 {
-		return fmt.Errorf("failed to process %d branch(es): %s",
+		return fmt.Errorf("failed to delete %d branch(es): %s",
 			len(failures), strings.Join(failures, ", "))
 	}
 	return nil
