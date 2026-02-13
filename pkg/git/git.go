@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -271,6 +272,21 @@ func CommitsAheadBehind(repoPath, branch, base string) (ahead int, behind int, e
 		return 0, 0, fmt.Errorf("parsing rev-list output %q: %w", out, err)
 	}
 	return ahead, behind, nil
+}
+
+// RevListCount runs git rev-list --count with the given spec and returns the count.
+// This is useful for checking how many commits one ref is ahead/behind another,
+// e.g. RevListCount(repo, "HEAD..origin/main") returns how many commits HEAD is behind.
+func RevListCount(repoPath, spec string) (int, error) {
+	out, err := run(repoPath, "rev-list", "--count", spec)
+	if err != nil {
+		return 0, err
+	}
+	count, err := strconv.Atoi(out)
+	if err != nil {
+		return 0, fmt.Errorf("parsing rev-list count output %q: %w", out, err)
+	}
+	return count, nil
 }
 
 // HasRemoteBranch returns true if the given branch exists on the specified remote.

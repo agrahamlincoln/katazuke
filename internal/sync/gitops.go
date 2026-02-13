@@ -89,3 +89,8 @@ func (r *RealGitOps) RebaseAbort(repoPath string) error {
 func (r *RealGitOps) MergeAbort(repoPath string) error {
 	return git.MergeAbort(repoPath)
 }
+
+// RevListCount returns the number of commits in the given rev-list spec.
+func (r *RealGitOps) RevListCount(repoPath, spec string) (int, error) {
+	return git.RevListCount(repoPath, spec)
+}

@@ -96,7 +96,7 @@ func (c *SyncCmd) Run(globals *CLI) error {
 	detector := merge.NewDetector(merge.RealGitChecker{}, gh)
 	gitOps := sync.NewRealGitOps(detector)
 
-	var synced, skipped, failed, switched int
+	var synced, skipped, failed, switched, upToDate int
 	syncStart := time.Now()
 
 	sync.All(repoPaths, opts, gitOps, workers, func(completed, total int, r sync.Result) {
@@ -107,7 +107,14 @@ func (c *SyncCmd) Run(globals *CLI) error {
 		switch r.Status {
 		case sync.Synced:
 			synced++
-			fmt.Printf("  %s %s\n", green.Sprint("[synced]"), r.RepoName)
+			if r.Message != "" {
+				fmt.Printf("  %s %s: %s\n", green.Sprint("[synced]"), r.RepoName, r.Message)
+			} else {
+				fmt.Printf("  %s %s\n", green.Sprint("[synced]"), r.RepoName)
+			}
+		case sync.UpToDate:
+			upToDate++
+			fmt.Printf("  %s %s\n", dim.Sprint("[up-to-date]"), dim.Sprint(r.RepoName))
 		case sync.Switched:
 			switched++
 			fmt.Printf("  %s %s: %s\n", green.Sprint("[switched]"), r.RepoName, r.Message)
@@ -131,7 +138,7 @@ func (c *SyncCmd) Run(globals *CLI) error {
 	// Clear final status line.
 	fmt.Print(clearLine)
 	fmt.Println()
-	summary := fmt.Sprintf("Synced %d, switched %d, skipped %d, failed %d", synced, switched, skipped, failed)
+	summary := fmt.Sprintf("Synced %d, up-to-date %d, switched %d, skipped %d, failed %d", synced, upToDate, switched, skipped, failed)
 	if globals.DryRun {
 		summary += " (dry run)"
 	}

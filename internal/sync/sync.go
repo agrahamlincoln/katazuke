@@ -22,14 +22,35 @@ const (
 	Failed
 	// Switched indicates the repo was on a merged branch and switched to default.
 	Switched
+	// UpToDate indicates the repository was already current with the remote.
+	UpToDate
 )
+
+// String returns the human-readable name of a Status value.
+func (s Status) String() string {
+	switch s {
+	case Synced:
+		return "Synced"
+	case Skipped:
+		return "Skipped"
+	case Failed:
+		return "Failed"
+	case Switched:
+		return "Switched"
+	case UpToDate:
+		return "UpToDate"
+	default:
+		return fmt.Sprintf("Status(%d)", int(s))
+	}
+}
 
 // Result represents the outcome of syncing a single repository.
 type Result struct {
-	RepoPath string
-	RepoName string
-	Status   Status
-	Message  string
+	RepoPath      string
+	RepoName      string
+	Status        Status
+	Message       string
+	CommitsPulled int // number of commits pulled, populated when known
 }
 
 // Options controls sync behavior.
@@ -59,6 +80,7 @@ type GitOps interface {
 	StashPop(repoPath string) error
 	RebaseAbort(repoPath string) error
 	MergeAbort(repoPath string) error
+	RevListCount(repoPath, spec string) (int, error)
 }
 
 // ResultFunc is called sequentially as each repo finishes syncing.
@@ -134,7 +156,7 @@ func syncOne(repoPath string, opts Options, git GitOps) Result {
 	}
 
 	if clean {
-		return syncClean(repoPath, repoName, opts, git)
+		return syncClean(repoPath, repoName, defaultBranch, opts, git)
 	}
 	return syncDirty(repoPath, repoName, defaultBranch, opts, git)
 }
@@ -171,13 +193,21 @@ func syncDetachedHEAD(repoPath, repoName, defaultBranch string, opts Options, gi
 		return result
 	}
 
-	pullResult := syncClean(repoPath, repoName, opts, git)
+	pullResult := syncClean(repoPath, repoName, defaultBranch, opts, git)
 	if pullResult.Status == Failed {
 		return pullResult
 	}
 
 	result.Status = Switched
-	result.Message = fmt.Sprintf("switched from detached HEAD to %s and synced", defaultBranch)
+	if pullResult.Status == UpToDate {
+		result.Message = fmt.Sprintf("switched from detached HEAD to %s (up-to-date)", defaultBranch)
+	} else {
+		msg := fmt.Sprintf("switched from detached HEAD to %s and synced", defaultBranch)
+		if pullResult.CommitsPulled > 0 {
+			msg += fmt.Sprintf(" (%d %s)", pullResult.CommitsPulled, pluralCommit(pullResult.CommitsPulled))
+		}
+		result.Message = msg
+	}
 	return result
 }
 
@@ -238,25 +268,46 @@ func syncNonDefault(repoPath, repoName, currentBranch, defaultBranch string, opt
 	}
 
 	// Now continue with normal sync (clean working tree on default branch).
-	pullResult := syncClean(repoPath, repoName, opts, git)
+	pullResult := syncClean(repoPath, repoName, defaultBranch, opts, git)
 	if pullResult.Status == Failed {
 		return pullResult
 	}
 
 	result.Status = Switched
-	result.Message = fmt.Sprintf("switched from merged branch %q to %s and synced", currentBranch, defaultBranch)
+	if pullResult.Status == UpToDate {
+		result.Message = fmt.Sprintf("switched from merged branch %q to %s (up-to-date)", currentBranch, defaultBranch)
+	} else {
+		msg := fmt.Sprintf("switched from merged branch %q to %s and synced", currentBranch, defaultBranch)
+		if pullResult.CommitsPulled > 0 {
+			msg += fmt.Sprintf(" (%d %s)", pullResult.CommitsPulled, pluralCommit(pullResult.CommitsPulled))
+		}
+		result.Message = msg
+	}
 	return result
 }
 
-func syncClean(repoPath, repoName string, opts Options, git GitOps) Result {
+func syncClean(repoPath, repoName, defaultBranch string, opts Options, git GitOps) Result {
 	result := Result{
 		RepoPath: repoPath,
 		RepoName: repoName,
 	}
 
+	// Check how many commits we're behind the remote. This uses the
+	// already-fetched origin ref, so the count matches what pull will apply.
+	remoteRef := "origin/" + defaultBranch
+	behindCount, countErr := git.RevListCount(repoPath, "HEAD.."+remoteRef)
+	if countErr == nil && behindCount == 0 {
+		result.Status = UpToDate
+		return result
+	}
+
 	if opts.DryRun {
 		result.Status = Skipped
-		result.Message = "would pull (dry run)"
+		if countErr == nil {
+			result.Message = fmt.Sprintf("would pull, %d %s behind (dry run)", behindCount, pluralCommit(behindCount))
+		} else {
+			result.Message = "would pull (dry run)"
+		}
 		return result
 	}
 
@@ -268,7 +319,12 @@ func syncClean(repoPath, repoName string, opts Options, git GitOps) Result {
 	}
 
 	result.Status = Synced
-	result.Message = "pulled successfully"
+	if countErr == nil {
+		result.CommitsPulled = behindCount
+		result.Message = fmt.Sprintf("%d %s", behindCount, pluralCommit(behindCount))
+	} else {
+		result.Message = "pulled successfully"
+	}
 	return result
 }
 
@@ -312,9 +368,21 @@ func syncDirty(repoPath, repoName, defaultBranch string, opts Options, git GitOp
 		return result
 	}
 
+	// Check how many commits we're behind the remote. This uses the
+	// already-fetched origin ref, so the count matches what pull will apply.
+	behindCount, countErr := git.RevListCount(repoPath, "HEAD.."+remoteRef)
+	if countErr == nil && behindCount == 0 {
+		result.Status = UpToDate
+		return result
+	}
+
 	if opts.DryRun {
 		result.Status = Skipped
-		result.Message = "would stash, pull, and pop (dry run)"
+		if countErr == nil {
+			result.Message = fmt.Sprintf("would stash, pull, and pop, %d %s behind (dry run)", behindCount, pluralCommit(behindCount))
+		} else {
+			result.Message = "would stash, pull, and pop (dry run)"
+		}
 		return result
 	}
 
@@ -347,8 +415,20 @@ func syncDirty(repoPath, repoName, defaultBranch string, opts Options, git GitOp
 	}
 
 	result.Status = Synced
-	result.Message = "pulled with auto-stash"
+	if countErr == nil {
+		result.CommitsPulled = behindCount
+		result.Message = fmt.Sprintf("%d %s, auto-stash", behindCount, pluralCommit(behindCount))
+	} else {
+		result.Message = "pulled with auto-stash"
+	}
 	return result
+}
+
+func pluralCommit(n int) string {
+	if n == 1 {
+		return "commit"
+	}
+	return "commits"
 }
 
 // abortPull attempts to abort a partial pull by running the appropriate

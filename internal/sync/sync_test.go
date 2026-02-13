@@ -35,16 +35,19 @@ type mockGitOps struct {
 	stashPopErr      error
 	rebaseAbortErr   error
 	mergeAbortErr    error
+	revListCount     int
+	revListCountErr  error
 
 	// Track calls for verification.
-	fetchCalls       []string
-	pullCalls        []string
-	isMergedCalls    []string
-	checkoutCalls    []string
-	stashPushCalls   []string
-	stashPopCalls    int
-	rebaseAbortCalls int
-	mergeAbortCalls  int
+	fetchCalls        []string
+	pullCalls         []string
+	revListCountCalls []string
+	isMergedCalls     []string
+	checkoutCalls     []string
+	stashPushCalls    []string
+	stashPopCalls     int
+	rebaseAbortCalls  int
+	mergeAbortCalls   int
 }
 
 func (m *mockGitOps) Fetch(repoPath, _ string) error {
@@ -139,6 +142,13 @@ func (m *mockGitOps) MergeAbort(_ string) error {
 	return m.mergeAbortErr
 }
 
+func (m *mockGitOps) RevListCount(_ string, spec string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.revListCountCalls = append(m.revListCountCalls, spec)
+	return m.revListCount, m.revListCountErr
+}
+
 func defaultMock() *mockGitOps {
 	return &mockGitOps{
 		hasRemote:        true,
@@ -147,6 +157,7 @@ func defaultMock() *mockGitOps {
 		defaultBranch:    "main",
 		mergeBase:        "abc123",
 		stashPushCreated: true,
+		revListCount:     1,
 	}
 }
 
@@ -161,7 +172,7 @@ func TestAll_CleanRepo(t *testing.T) {
 	}
 	r := results[0]
 	if r.Status != Synced {
-		t.Errorf("expected Synced, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Synced, got %s: %s", r.Status, r.Message)
 	}
 	if len(mock.fetchCalls) != 1 {
 		t.Errorf("expected 1 fetch call, got %d", len(mock.fetchCalls))
@@ -180,7 +191,7 @@ func TestAll_NoRemote(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Skipped {
-		t.Errorf("expected Skipped, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Skipped, got %s: %s", r.Status, r.Message)
 	}
 	if len(mock.fetchCalls) != 0 {
 		t.Error("should not have fetched when no remote")
@@ -196,7 +207,7 @@ func TestAll_FetchFails(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Failed {
-		t.Errorf("expected Failed, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Failed, got %s: %s", r.Status, r.Message)
 	}
 }
 
@@ -209,7 +220,7 @@ func TestAll_NotOnDefaultBranch(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Skipped {
-		t.Errorf("expected Skipped, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Skipped, got %s: %s", r.Status, r.Message)
 	}
 }
 
@@ -222,7 +233,7 @@ func TestAll_DirtySkipDirty(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Skipped {
-		t.Errorf("expected Skipped, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Skipped, got %s: %s", r.Status, r.Message)
 	}
 }
 
@@ -235,7 +246,7 @@ func TestAll_DirtyAutoStashDisabled(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Skipped {
-		t.Errorf("expected Skipped, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Skipped, got %s: %s", r.Status, r.Message)
 	}
 }
 
@@ -249,7 +260,7 @@ func TestAll_DirtyAutoStashSuccess(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Synced {
-		t.Errorf("expected Synced, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Synced, got %s: %s", r.Status, r.Message)
 	}
 	if len(mock.stashPushCalls) != 1 {
 		t.Error("expected stash push to be called")
@@ -269,7 +280,7 @@ func TestAll_DirtyAutoStashConflict(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Skipped {
-		t.Errorf("expected Skipped, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Skipped, got %s: %s", r.Status, r.Message)
 	}
 	if len(mock.stashPushCalls) != 0 {
 		t.Error("should not stash when conflicts detected")
@@ -287,7 +298,7 @@ func TestAll_DirtyStashPopFails(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Failed {
-		t.Errorf("expected Failed, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Failed, got %s: %s", r.Status, r.Message)
 	}
 }
 
@@ -300,7 +311,7 @@ func TestAll_PullFails(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Failed {
-		t.Errorf("expected Failed, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Failed, got %s: %s", r.Status, r.Message)
 	}
 }
 
@@ -312,7 +323,7 @@ func TestAll_DryRun_Clean(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Skipped {
-		t.Errorf("expected Skipped for dry run, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Skipped for dry run, got %s: %s", r.Status, r.Message)
 	}
 	if len(mock.pullCalls) != 0 {
 		t.Error("should not pull during dry run")
@@ -329,7 +340,7 @@ func TestAll_DryRun_Dirty(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Skipped {
-		t.Errorf("expected Skipped for dry run, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Skipped for dry run, got %s: %s", r.Status, r.Message)
 	}
 	if len(mock.stashPushCalls) != 0 {
 		t.Error("should not stash during dry run")
@@ -348,7 +359,7 @@ func TestAll_MultipleRepos(t *testing.T) {
 	}
 	for i, r := range results {
 		if r.Status != Synced {
-			t.Errorf("repo %d: expected Synced, got %d: %s", i, r.Status, r.Message)
+			t.Errorf("repo %d: expected Synced, got %s: %s", i, r.Status, r.Message)
 		}
 	}
 }
@@ -375,7 +386,7 @@ func TestAll_DirtyPullFailsAfterStash_RebaseAbort(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Failed {
-		t.Errorf("expected Failed, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Failed, got %s: %s", r.Status, r.Message)
 	}
 	if len(mock.stashPushCalls) != 1 {
 		t.Error("expected stash push to be called")
@@ -404,7 +415,7 @@ func TestAll_DirtyPullFailsAfterStash_MergeAbort(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Failed {
-		t.Errorf("expected Failed, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Failed, got %s: %s", r.Status, r.Message)
 	}
 	// Merge --abort should be called for merge strategy.
 	if mock.mergeAbortCalls != 1 {
@@ -426,7 +437,7 @@ func TestAll_DirtyPullFailsAfterStash_FFOnlyAbort(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Failed {
-		t.Errorf("expected Failed, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Failed, got %s: %s", r.Status, r.Message)
 	}
 	// ff-only uses merge under the hood, so merge --abort should be called.
 	if mock.mergeAbortCalls != 1 {
@@ -459,7 +470,7 @@ func TestAll_ParallelMultipleRepos(t *testing.T) {
 	}
 	for _, r := range results {
 		if r.Status != Synced {
-			t.Errorf("repo %s: expected Synced, got %d: %s", r.RepoName, r.Status, r.Message)
+			t.Errorf("repo %s: expected Synced, got %s: %s", r.RepoName, r.Status, r.Message)
 		}
 	}
 }
@@ -491,7 +502,7 @@ func TestAll_MergedBranchAutoSwitch(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Switched {
-		t.Errorf("expected Switched, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Switched, got %s: %s", r.Status, r.Message)
 	}
 	if len(mock.checkoutCalls) != 1 || mock.checkoutCalls[0] != "main" {
 		t.Errorf("expected checkout to main, got %v", mock.checkoutCalls)
@@ -511,7 +522,7 @@ func TestAll_MergedBranchAutoSwitchDisabled(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Skipped {
-		t.Errorf("expected Skipped, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Skipped, got %s: %s", r.Status, r.Message)
 	}
 	if len(mock.checkoutCalls) != 0 {
 		t.Error("should not checkout when auto-switch disabled")
@@ -533,7 +544,7 @@ func TestAll_MergedBranchDirtyWorkingTree(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Skipped {
-		t.Errorf("expected Skipped, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Skipped, got %s: %s", r.Status, r.Message)
 	}
 	if len(mock.checkoutCalls) != 0 {
 		t.Error("should not checkout when working tree is dirty")
@@ -550,7 +561,7 @@ func TestAll_NotOnDefaultBranchNotMerged(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Skipped {
-		t.Errorf("expected Skipped, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Skipped, got %s: %s", r.Status, r.Message)
 	}
 	if len(mock.checkoutCalls) != 0 {
 		t.Error("should not checkout when branch is not merged")
@@ -567,7 +578,7 @@ func TestAll_MergedBranchDryRun(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Skipped {
-		t.Errorf("expected Skipped for dry run, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Skipped for dry run, got %s: %s", r.Status, r.Message)
 	}
 	if len(mock.checkoutCalls) != 0 {
 		t.Error("should not checkout during dry run")
@@ -585,7 +596,7 @@ func TestAll_MergedBranchCheckoutFails(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Failed {
-		t.Errorf("expected Failed, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Failed, got %s: %s", r.Status, r.Message)
 	}
 }
 
@@ -600,7 +611,7 @@ func TestAll_MergedBranchSwitchThenPullFails(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Failed {
-		t.Errorf("expected Failed when pull fails after switch, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Failed when pull fails after switch, got %s: %s", r.Status, r.Message)
 	}
 	if len(mock.checkoutCalls) != 1 {
 		t.Errorf("expected 1 checkout call, got %d", len(mock.checkoutCalls))
@@ -617,7 +628,7 @@ func TestAll_DetachedHEAD_CleanCheckoutAndSync(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Switched {
-		t.Errorf("expected Switched, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Switched, got %s: %s", r.Status, r.Message)
 	}
 	if len(mock.checkoutCalls) != 1 || mock.checkoutCalls[0] != "main" {
 		t.Errorf("expected checkout to main, got %v", mock.checkoutCalls)
@@ -640,7 +651,7 @@ func TestAll_DetachedHEAD_DirtySkip(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Skipped {
-		t.Errorf("expected Skipped, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Skipped, got %s: %s", r.Status, r.Message)
 	}
 	if len(mock.checkoutCalls) != 0 {
 		t.Error("should not checkout when working tree is dirty")
@@ -657,7 +668,7 @@ func TestAll_DetachedHEAD_DryRun(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Skipped {
-		t.Errorf("expected Skipped for dry run, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Skipped for dry run, got %s: %s", r.Status, r.Message)
 	}
 	if len(mock.checkoutCalls) != 0 {
 		t.Error("should not checkout during dry run")
@@ -678,7 +689,7 @@ func TestAll_DetachedHEAD_CheckoutFails(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Failed {
-		t.Errorf("expected Failed, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Failed, got %s: %s", r.Status, r.Message)
 	}
 }
 
@@ -693,7 +704,7 @@ func TestAll_DetachedHEAD_PullFails(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Failed {
-		t.Errorf("expected Failed, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Failed, got %s: %s", r.Status, r.Message)
 	}
 }
 
@@ -721,12 +732,249 @@ func TestAll_DirtyAutoStashNothingStashed(t *testing.T) {
 
 	r := results[0]
 	if r.Status != Synced {
-		t.Errorf("expected Synced, got %d: %s", r.Status, r.Message)
+		t.Errorf("expected Synced, got %s: %s", r.Status, r.Message)
 	}
 	if len(mock.stashPushCalls) != 1 {
 		t.Error("expected stash push to be called")
 	}
 	if mock.stashPopCalls != 0 {
 		t.Error("should not pop stash when nothing was stashed")
+	}
+}
+
+func TestAll_UpToDate(t *testing.T) {
+	mock := defaultMock()
+	mock.revListCount = 0
+	opts := Options{Strategy: "rebase"}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != UpToDate {
+		t.Errorf("expected UpToDate, got %s: %s", r.Status, r.Message)
+	}
+	if len(mock.pullCalls) != 0 {
+		t.Error("should not pull when already up-to-date")
+	}
+}
+
+func TestAll_UpToDate_Dirty(t *testing.T) {
+	mock := defaultMock()
+	mock.revListCount = 0
+	mock.isClean = false
+	mock.mergeTreeConfl = false
+	opts := Options{Strategy: "rebase", AutoStash: true}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != UpToDate {
+		t.Errorf("expected UpToDate, got %s: %s", r.Status, r.Message)
+	}
+	if len(mock.stashPushCalls) != 0 {
+		t.Error("should not stash when already up-to-date")
+	}
+	if len(mock.pullCalls) != 0 {
+		t.Error("should not pull when already up-to-date")
+	}
+}
+
+func TestAll_PullWithCommitCount(t *testing.T) {
+	mock := defaultMock()
+	mock.revListCount = 3
+	opts := Options{Strategy: "rebase"}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Synced {
+		t.Errorf("expected Synced, got %s: %s", r.Status, r.Message)
+	}
+	if r.CommitsPulled != 3 {
+		t.Errorf("expected CommitsPulled=3, got %d", r.CommitsPulled)
+	}
+	if !strings.Contains(r.Message, "3 commits") {
+		t.Errorf("expected message to contain '3 commits', got %q", r.Message)
+	}
+}
+
+func TestAll_PullWithSingleCommit(t *testing.T) {
+	mock := defaultMock()
+	mock.revListCount = 1
+	opts := Options{Strategy: "rebase"}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Synced {
+		t.Errorf("expected Synced, got %s: %s", r.Status, r.Message)
+	}
+	if !strings.Contains(r.Message, "1 commit") {
+		t.Errorf("expected message to contain '1 commit', got %q", r.Message)
+	}
+	if strings.Contains(r.Message, "commits") {
+		t.Errorf("expected singular 'commit', got %q", r.Message)
+	}
+}
+
+func TestAll_RevListCountFails(t *testing.T) {
+	mock := defaultMock()
+	mock.revListCountErr = fmt.Errorf("rev-list failed")
+	opts := Options{Strategy: "rebase"}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Synced {
+		t.Errorf("expected Synced (graceful degradation), got %s: %s", r.Status, r.Message)
+	}
+	if len(mock.pullCalls) != 1 {
+		t.Errorf("expected pull to still happen, got %d calls", len(mock.pullCalls))
+	}
+	if r.CommitsPulled != 0 {
+		t.Errorf("expected CommitsPulled=0 when count fails, got %d", r.CommitsPulled)
+	}
+	if r.Message != "pulled successfully" {
+		t.Errorf("expected fallback message, got %q", r.Message)
+	}
+}
+
+func TestAll_RevListCountFails_Dirty(t *testing.T) {
+	mock := defaultMock()
+	mock.isClean = false
+	mock.mergeTreeConfl = false
+	mock.revListCountErr = fmt.Errorf("rev-list failed")
+	opts := Options{Strategy: "rebase", AutoStash: true}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Synced {
+		t.Errorf("expected Synced (graceful degradation), got %s: %s", r.Status, r.Message)
+	}
+	if len(mock.pullCalls) != 1 {
+		t.Errorf("expected pull to still happen, got %d calls", len(mock.pullCalls))
+	}
+	if r.Message != "pulled with auto-stash" {
+		t.Errorf("expected fallback message, got %q", r.Message)
+	}
+}
+
+func TestAll_SwitchedWithCommitCount(t *testing.T) {
+	mock := defaultMock()
+	mock.currentBranch = "feature/done"
+	mock.isMerged = true
+	mock.revListCount = 3
+	opts := Options{Strategy: "rebase", SwitchMergedBranch: true}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Switched {
+		t.Errorf("expected Switched, got %s: %s", r.Status, r.Message)
+	}
+	if !strings.Contains(r.Message, "3 commits") {
+		t.Errorf("expected message to contain '3 commits', got %q", r.Message)
+	}
+}
+
+func TestAll_SwitchedUpToDate(t *testing.T) {
+	mock := defaultMock()
+	mock.currentBranch = "feature/done"
+	mock.isMerged = true
+	mock.revListCount = 0
+	opts := Options{Strategy: "rebase", SwitchMergedBranch: true}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Switched {
+		t.Errorf("expected Switched, got %s: %s", r.Status, r.Message)
+	}
+	if !strings.Contains(r.Message, "up-to-date") {
+		t.Errorf("expected message to contain 'up-to-date', got %q", r.Message)
+	}
+	if len(mock.pullCalls) != 0 {
+		t.Error("should not pull when already up-to-date")
+	}
+}
+
+func TestAll_DetachedHEAD_SwitchedUpToDate(t *testing.T) {
+	mock := defaultMock()
+	mock.currentBranch = ""
+	mock.isClean = true
+	mock.revListCount = 0
+	opts := Options{Strategy: "rebase"}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Switched {
+		t.Errorf("expected Switched, got %s: %s", r.Status, r.Message)
+	}
+	if !strings.Contains(r.Message, "up-to-date") {
+		t.Errorf("expected message to contain 'up-to-date', got %q", r.Message)
+	}
+	if !strings.Contains(r.Message, "detached HEAD") {
+		t.Errorf("expected message to mention detached HEAD, got %q", r.Message)
+	}
+	if len(mock.pullCalls) != 0 {
+		t.Error("should not pull when already up-to-date")
+	}
+}
+
+func TestAll_DirtyAutoStashWithCommitCount(t *testing.T) {
+	mock := defaultMock()
+	mock.isClean = false
+	mock.mergeTreeConfl = false
+	mock.revListCount = 5
+	opts := Options{Strategy: "rebase", AutoStash: true}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Synced {
+		t.Errorf("expected Synced, got %s: %s", r.Status, r.Message)
+	}
+	if r.CommitsPulled != 5 {
+		t.Errorf("expected CommitsPulled=5, got %d", r.CommitsPulled)
+	}
+	if !strings.Contains(r.Message, "5 commits") {
+		t.Errorf("expected message to contain '5 commits', got %q", r.Message)
+	}
+	if !strings.Contains(r.Message, "auto-stash") {
+		t.Errorf("expected message to contain 'auto-stash', got %q", r.Message)
+	}
+}
+
+func TestAll_DryRun_CleanWithBehindCount(t *testing.T) {
+	mock := defaultMock()
+	mock.revListCount = 3
+	opts := Options{Strategy: "rebase", DryRun: true}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != Skipped {
+		t.Errorf("expected Skipped for dry run, got %s: %s", r.Status, r.Message)
+	}
+	if !strings.Contains(r.Message, "3 commits behind") {
+		t.Errorf("expected message to contain '3 commits behind', got %q", r.Message)
+	}
+	if len(mock.pullCalls) != 0 {
+		t.Error("should not pull during dry run")
+	}
+}
+
+func TestAll_DryRun_UpToDate(t *testing.T) {
+	mock := defaultMock()
+	mock.revListCount = 0
+	opts := Options{Strategy: "rebase", DryRun: true}
+
+	results := All([]string{"/repos/project"}, opts, mock, 1, nil)
+
+	r := results[0]
+	if r.Status != UpToDate {
+		t.Errorf("expected UpToDate even in dry run, got %s: %s", r.Status, r.Message)
 	}
 }
