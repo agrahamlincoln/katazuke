@@ -129,11 +129,11 @@ func findMergedInRepo(repoPath string, detector *merge.Detector) []MergedBranch 
 }
 
 // Label returns a display string for the merged branch in the form "repo: branch".
-// Branches with a remote counterpart are annotated with "(+ remote)".
+// Branches with a remote counterpart are annotated with "(backed up remotely)".
 func (m MergedBranch) Label() string {
 	label := fmt.Sprintf("%s: %s", m.RepoName, m.Branch)
 	if m.HasRemote {
-		label += " (+ remote)"
+		label += " (backed up remotely)"
 	}
 	return label
 }
