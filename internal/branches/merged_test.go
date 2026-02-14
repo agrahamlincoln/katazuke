@@ -188,7 +188,7 @@ func TestMergedBranch_LabelWithRemote(t *testing.T) {
 		Branch:    "feature/test",
 		HasRemote: true,
 	}
-	want := "my-repo: feature/test (+ remote)"
+	want := "my-repo: feature/test (backed up remotely)"
 	if got := mb.Label(); got != want {
 		t.Errorf("Label() = %q, want %q", got, want)
 	}
