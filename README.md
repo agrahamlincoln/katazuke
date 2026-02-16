@@ -35,9 +35,10 @@ brew install katazuke
 
 ### Arch Linux
 
+The `packaging/PKGBUILD` in this repository is the canonical pacman build definition. Releases are built with [tatara](https://github.com/agrahamlincoln/tatara), a private packaging tool. To build from source manually:
+
 ```bash
-git clone https://github.com/agrahamlincoln/aur-katazuke.git
-cd aur-katazuke
+cd packaging
 makepkg -si
 ```
 
@@ -196,8 +197,6 @@ just lint         # Run golangci-lint
 just release VER  # Full release automation
 just --list       # See all available commands
 ```
-
-See [PRD.md](PRD.md) for product requirements and design decisions.
 
 ## License
 

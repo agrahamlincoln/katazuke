@@ -38,3 +38,9 @@ bin/
 
 # Claude Code local settings (personal, not shared)
 .claude/settings.local.json
+
+# Packaging artifacts (makepkg build output)
+packaging/src/
+packaging/pkg/
+packaging/*.pkg.tar.zst
+packaging/*.log

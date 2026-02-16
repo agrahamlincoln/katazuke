@@ -1,0 +1,46 @@
+# Maintainer: Graham Lincoln <agrahamlincoln@users.noreply.github.com>
+pkgname=katazuke
+pkgver=0.8.1
+pkgrel=1
+pkgdesc='Developer workspace maintenance tool for tidying up git repository clutter'
+arch=('x86_64')
+url='https://github.com/agrahamlincoln/katazuke'
+license=('MIT')
+depends=('git')
+makedepends=('go')
+options=(!debug)
+
+# tatara: builds from local source tree.
+# The source array is empty because tatara handles source checkout.
+# makepkg is invoked from within a git checkout of the project.
+source=()
+sha256sums=()
+
+prepare() {
+    # Link source tree into makepkg's working directory
+    ln -sfn "$startdir/.." "$srcdir/$pkgname-$pkgver"
+}
+
+build() {
+    cd "$srcdir/$pkgname-$pkgver"
+    export CGO_ENABLED=0
+    export GOFLAGS="-buildmode=pie -trimpath -mod=readonly -modcacherw"
+    # Target project must declare these in package main:
+    #   var version, commit, date string
+    go build \
+        -ldflags "-s -w -X main.version=$pkgver -X main.commit=$(git rev-parse --short HEAD) -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        -o "$pkgname" \
+        ./cmd/$pkgname
+}
+
+check() {
+    cd "$srcdir/$pkgname-$pkgver"
+    go test ./...
+}
+
+package() {
+    cd "$srcdir/$pkgname-$pkgver"
+    install -Dm755 "$pkgname" "$pkgdir/usr/bin/$pkgname"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

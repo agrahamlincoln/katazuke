@@ -26,23 +26,23 @@ The tool is **defensive by design**: detect when actual workflow differs from ex
 
 **The problem we solve**: Local branches that never get cleaned up after PRs are merged, leading to 50+ stale branches with meaningless short names. Also: archived repos taking up space, non-git clutter, and repos falling behind upstream.
 
-**Not supported**: Other workflows, other version control systems, cloud sync, backup features, team/org features. See PRD.md for explicit non-goals.
+**Not supported**: Other workflows, other version control systems, cloud sync, backup features, team/org features.
 
 ## Repository & Release Structure
 
 ### Main Repository (`agrahamlincoln/katazuke`)
 - Source code only (Go code, tests, justfile, documentation)
 
-### Packaging Repositories (sibling directories)
+### Packaging
+- **Pacman**: `packaging/PKGBUILD` in-repo, built by [tatara](https://github.com/agrahamlincoln/tatara)
 - **Homebrew**: `agrahamlincoln/homebrew-katazuke` (expected at `~/projects/homebrew-katazuke`)
-- **AUR**: `agrahamlincoln/aur-katazuke` (expected at `~/projects/aur-katazuke`, personal package)
 
-Packaging lives in separate repos to follow ecosystem conventions, avoid checksum chicken-and-egg problems, and keep packaging history out of the main repo. The release script (`just release VERSION`) updates both automatically.
+The release script (`just release VERSION`) drives tatara for version detection, tagging, GitHub release, and pacman packaging, then cross-compiles binaries and updates the Homebrew formula as a bolt-on.
 
 ### Platform Support
 - macOS: darwin-arm64 (Apple Silicon only)
 - Linux: linux-amd64 (x86_64 only)
-- No CI/CD: Manual releases via `just release VERSION` using `gh` CLI
+- No CI/CD: Manual releases via `just release VERSION` using tatara + `gh` CLI
 
 ## Development
 
@@ -68,10 +68,11 @@ Dependencies are in `go.mod`. Key choices worth noting:
 - **Interactive prompts**: charmbracelet/huh
 - **GitHub API**: cli/go-gh (leverages `gh` CLI auth, not go-github)
 - **Git operations**: Shells out to git CLI via `pkg/git/` (not go-git)
+- **Release tooling**: tatara (handles version detection, tagging, pacman packaging)
 
 ## Project Layout
 
-Standard Go project layout: `cmd/`, `internal/`, `pkg/`, `test/`. Each command (`branches`, `repos`, `audit`, `sync`) has a corresponding file in `cmd/katazuke/` and business logic in `internal/`.
+Standard Go project layout: `cmd/`, `internal/`, `pkg/`, `test/`, `packaging/`. Each command (`branches`, `repos`, `audit`, `sync`) has a corresponding file in `cmd/katazuke/` and business logic in `internal/`.
 
 Key conventions:
 - `internal/scanner/` handles repository discovery using `.katazuke` index files
@@ -124,7 +125,7 @@ Key conventions:
 
 Only track metrics that inform specific improvements to katazuke. Before adding a metric, ask: "If this metric shows an unexpected pattern, what specific change would we make to katazuke?" If the answer is unclear, don't track it.
 
-Storage: Local only (`~/.local/share/katazuke/metrics/`), JSONL format, versioned schema. See PRD.md "Success Metrics" for full rationale.
+Storage: Local only (`~/.local/share/katazuke/metrics/`), JSONL format, versioned schema.
 
 ## Design Checklist
 
@@ -137,6 +138,5 @@ When implementing features, consider:
 
 ## Key References
 
-- **PRD.md**: Product requirements and design decisions (user journeys and metrics philosophy are authoritative; some technical details like dependencies were updated during implementation and may not match)
 - **README.md**: User-facing documentation and workflow context
 - **justfile**: `just --list` for all development commands

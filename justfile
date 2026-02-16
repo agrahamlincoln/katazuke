@@ -134,10 +134,9 @@ build-all:
     GOOS=linux GOARCH=amd64 go build -ldflags "{{ldflags}}" -o dist/{{binary_name}}-linux-amd64 ./cmd/katazuke
     @echo "Built all platform binaries in dist/"
 
-# Create a new release (fully automated)
-# Auto-detects version from conventional commits, or specify manually.
-# Usage: just release [VERSION] [--dry-run]
-# Requires: gh CLI, git tags following vX.Y.Z convention
+# Create a new release via tatara (pacman) + Homebrew bolt-on
+# Usage: just release [VERSION] [--dry-run] [--skip-homebrew]
+# Requires: tatara, gh CLI
 release *ARGS:
     ./scripts/release.sh {{ARGS}}
 
