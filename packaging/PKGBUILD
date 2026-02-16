@@ -1,6 +1,6 @@
 # Maintainer: Graham Lincoln <agrahamlincoln@users.noreply.github.com>
 pkgname=katazuke
-pkgver=0.8.1
+pkgver=0.9.0
 pkgrel=1
 pkgdesc='Developer workspace maintenance tool for tidying up git repository clutter'
 arch=('x86_64')
