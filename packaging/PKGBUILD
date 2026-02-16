@@ -35,6 +35,9 @@ build() {
 
 check() {
     cd "$srcdir/$pkgname-$pkgver"
+    # makepkg creates src/ and pkg/ under packaging/ which have restricted
+    # permissions and cause 'go test ./...' to fail during traversal.
+    rm -rf packaging/src packaging/pkg
     go test ./...
 }
 
