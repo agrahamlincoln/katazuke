@@ -50,6 +50,8 @@ The release script (`just release VERSION`) drives tatara for version detection,
 - **Primary**: `just` (justfile) -- run `just --list` for all commands
 - **Removed**: Makefile (deleted, do not recreate)
 - Key: `just build`, `just test`, `just lint`, `just test-e2e`, `just release VERSION`
+- **Always use `just` targets** instead of raw `go build`, `go test`, `golangci-lint` commands -- the justfile sets correct flags and environment
+- **Run `just lint 2>&1` before committing** -- lint failures are the most common issue in this project
 
 ### Testing
 - **Unit tests**: Standard Go tests (`*_test.go`) alongside source
@@ -61,6 +63,8 @@ The release script (`just release VERSION`) drives tatara for version detection,
 - **Tool**: golangci-lint (config in `.golangci.yaml`)
 - **Formatters**: gofmt, goimports (separate from linters in config)
 - **Strategy**: Fix issues, don't suppress them (no nolint comments unless absolutely necessary with explanation)
+- **errcheck pitfall**: `color.Printf` returns are unchecked -- use `fmt.Printf(color.Sprintf(...))` pattern instead
+- **gosec**: Use 0750 for directories, 0600 for sensitive files
 
 ### Dependencies
 Dependencies are in `go.mod`. Key choices worth noting:
@@ -95,6 +99,8 @@ Key conventions:
 - Conventional commits format
 - Subject: <72 characters, body lines: <80 characters
 - Focus on why/what-changed, not how
+- **NEVER reference PRD phases** (Phase 1, Phase 2, etc.) in commit messages, branch names, or PR descriptions -- describe the actual feature/fix, not the planning context
+- Separate infrastructure changes (e.g., `.claude/settings.json`) into their own `chore:` commits
 
 ### Comments
 - Explain "why" (intent, business logic), not "what"
@@ -120,6 +126,8 @@ Key conventions:
 - Create files unless explicitly necessary (prefer editing existing)
 - Add features for hypothetical future requirements
 - Recreate the Makefile
+- Reference PRD phases in any user-facing text (commits, PRs, branches, output)
+- Run raw `go build`/`go test`/`golangci-lint` instead of `just` targets
 
 ## Metrics Philosophy
 
