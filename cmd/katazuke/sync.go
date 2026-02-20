@@ -114,7 +114,6 @@ func (c *SyncCmd) Run(globals *CLI) error {
 			}
 		case sync.UpToDate:
 			upToDate++
-			fmt.Printf("  %s %s\n", dim.Sprint("[up-to-date]"), dim.Sprint(r.RepoName))
 		case sync.Switched:
 			switched++
 			fmt.Printf("  %s %s: %s\n", green.Sprint("[switched]"), r.RepoName, r.Message)
