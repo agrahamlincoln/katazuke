@@ -15,8 +15,8 @@ import (
 
 // IndexFile represents the schema of a .katazuke index file.
 type IndexFile struct {
-	Groups  []string `yaml:"groups"`
-	Ignores []string `yaml:"ignores"`
+	Groups  []string `yaml:"groups,omitempty"`
+	Ignores []string `yaml:"ignores,omitempty"`
 }
 
 // Options controls scanning behavior.

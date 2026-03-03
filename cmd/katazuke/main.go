@@ -39,6 +39,7 @@ type CLI struct {
 	Repos    ReposCmd    `cmd:"" help:"Manage repository checkouts."`
 	Audit    AuditCmd    `cmd:"" help:"Run full workspace audit."`
 	Sync     SyncCmd     `cmd:"" help:"Sync all repositories."`
+	Init     InitCmd     `cmd:"" help:"Create .katazuke index file interactively."`
 	Log      LogCmd      `cmd:"" help:"Show recent operations."`
 	Version  VersionCmd  `cmd:"" help:"Show version information."`
 }
