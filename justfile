@@ -134,12 +134,6 @@ build-all:
     GOOS=linux GOARCH=amd64 go build -ldflags "{{ldflags}}" -o dist/{{binary_name}}-linux-amd64 ./cmd/katazuke
     @echo "Built all platform binaries in dist/"
 
-# Create a new release via tatara (pacman) + Homebrew bolt-on
-# Usage: just release [VERSION] [--dry-run] [--skip-homebrew]
-# Requires: tatara, gh CLI
-release *ARGS:
-    ./scripts/release.sh {{ARGS}}
-
 # Run the binary (build first if needed)
 run *ARGS: build
     {{build_dir}}/{{binary_name}} {{ARGS}}

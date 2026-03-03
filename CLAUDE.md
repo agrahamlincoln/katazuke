@@ -37,19 +37,19 @@ The tool is **defensive by design**: detect when actual workflow differs from ex
 - **Pacman**: `packaging/PKGBUILD` in-repo, built by [tatara](https://github.com/agrahamlincoln/tatara)
 - **Homebrew**: `agrahamlincoln/homebrew-katazuke` (expected at `~/projects/homebrew-katazuke`)
 
-The release script (`just release VERSION`) drives tatara for version detection, tagging, GitHub release, and pacman packaging, then cross-compiles binaries and updates the Homebrew formula as a bolt-on.
+`tatara release` handles the full workflow: version detection, tagging, GitHub release, pacman packaging, and then runs the post-release hook (`scripts/post-release.sh`) which cross-compiles binaries and updates the Homebrew formula.
 
 ### Platform Support
 - macOS: darwin-arm64 (Apple Silicon only)
 - Linux: linux-amd64 (x86_64 only)
-- No CI/CD: Manual releases via `just release VERSION` using tatara + `gh` CLI
+- No CI/CD: Manual releases via `tatara release` + `gh` CLI
 
 ## Development
 
 ### Build System
 - **Primary**: `just` (justfile) -- run `just --list` for all commands
 - **Removed**: Makefile (deleted, do not recreate)
-- Key: `just build`, `just test`, `just lint`, `just test-e2e`, `just release VERSION`
+- Key: `just build`, `just test`, `just lint`, `just test-e2e`
 - **Always use `just` targets** instead of raw `go build`, `go test`, `golangci-lint` commands -- the justfile sets correct flags and environment
 - **Run `just lint 2>&1` before committing** -- lint failures are the most common issue in this project
 
