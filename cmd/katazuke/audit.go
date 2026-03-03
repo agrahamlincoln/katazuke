@@ -12,6 +12,7 @@ import (
 	"github.com/agrahamlincoln/katazuke/internal/audit"
 	"github.com/agrahamlincoln/katazuke/internal/config"
 	"github.com/agrahamlincoln/katazuke/internal/metrics"
+	"github.com/agrahamlincoln/katazuke/internal/oplog"
 )
 
 // AuditCmd handles workspace auditing.
@@ -37,6 +38,8 @@ func (c *AuditCmd) runNonGit(globals *CLI) error {
 
 	ml := metrics.NewOrNil()
 	defer func() { _ = ml.Close() }()
+	ol := oplog.NewOrNil()
+	defer func() { _ = ol.Close() }()
 
 	var flags []string
 	if globals.DryRun {
@@ -89,7 +92,7 @@ func (c *AuditCmd) runNonGit(globals *CLI) error {
 		return nil
 	}
 
-	return promptNonGitActions(dirs, ml)
+	return promptNonGitActions(dirs, ml, ol)
 }
 
 const (
@@ -98,7 +101,7 @@ const (
 	actionMove   = "move"
 )
 
-func promptNonGitActions(dirs []audit.NonRepoDir, ml *metrics.Logger) error {
+func promptNonGitActions(dirs []audit.NonRepoDir, ml *metrics.Logger, ol *oplog.Logger) error {
 	bold := color.New(color.Bold)
 	green := color.New(color.FgGreen)
 	red := color.New(color.FgRed)
@@ -155,6 +158,11 @@ func promptNonGitActions(dirs []audit.NonRepoDir, ml *metrics.Logger) error {
 				fmt.Printf("  %s\n", red.Sprintf("Failed to remove %s: %v", a.dir.Path, err))
 				continue
 			}
+			_ = ol.Log(oplog.Operation{
+				Type:      oplog.OpDeleteDir,
+				Path:      a.dir.Path,
+				SizeBytes: a.dir.Size,
+			})
 			fmt.Printf("  %s\n", green.Sprintf("Removed %s", a.dir.Path))
 			removed++
 		case actionMove:
@@ -164,6 +172,12 @@ func promptNonGitActions(dirs []audit.NonRepoDir, ml *metrics.Logger) error {
 				fmt.Printf("  %s\n", red.Sprintf("Failed to move %s: %v", a.dir.Path, err))
 				continue
 			}
+			_ = ol.Log(oplog.Operation{
+				Type:        oplog.OpMoveDir,
+				Path:        a.dir.Path,
+				Destination: dest,
+				SizeBytes:   a.dir.Size,
+			})
 			fmt.Printf("  %s\n", yellow.Sprintf("Moved to %s", dest))
 			moved++
 		}

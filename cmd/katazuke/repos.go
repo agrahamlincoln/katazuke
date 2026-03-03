@@ -13,6 +13,7 @@ import (
 	"github.com/agrahamlincoln/katazuke/internal/github"
 	"github.com/agrahamlincoln/katazuke/internal/merge"
 	"github.com/agrahamlincoln/katazuke/internal/metrics"
+	"github.com/agrahamlincoln/katazuke/internal/oplog"
 	"github.com/agrahamlincoln/katazuke/internal/repos"
 	"github.com/agrahamlincoln/katazuke/internal/scanner"
 	"github.com/agrahamlincoln/katazuke/pkg/git"
@@ -81,6 +82,8 @@ func (c *ReposCmd) runAll(globals *CLI) error {
 		return nil
 	}
 	defer func() { _ = ml.Close() }()
+	ol := oplog.NewOrNil()
+	defer func() { _ = ol.Close() }()
 
 	var flags []string
 	if globals.DryRun {
@@ -124,7 +127,7 @@ func (c *ReposCmd) runAll(globals *CLI) error {
 		hasIssues = true
 		printMergedRepos(mergedRepos)
 		if !globals.DryRun {
-			if err := promptMergedRepoActions(mergedRepos, ml); err != nil {
+			if err := promptMergedRepoActions(mergedRepos, ml, ol); err != nil {
 				return err
 			}
 		}
@@ -134,7 +137,7 @@ func (c *ReposCmd) runAll(globals *CLI) error {
 		hasIssues = true
 		printArchivedRepos(archived)
 		if !globals.DryRun {
-			if err := promptArchivedRepoActions(archived, ml); err != nil {
+			if err := promptArchivedRepoActions(archived, ml, ol); err != nil {
 				return err
 			}
 		}
@@ -160,6 +163,8 @@ func (c *ReposCmd) runMerged(globals *CLI) error {
 		return nil
 	}
 	defer func() { _ = ml.Close() }()
+	ol := oplog.NewOrNil()
+	defer func() { _ = ol.Close() }()
 
 	var flags []string
 	if globals.DryRun {
@@ -194,7 +199,7 @@ func (c *ReposCmd) runMerged(globals *CLI) error {
 		return nil
 	}
 
-	return promptMergedRepoActions(mergedRepos, ml)
+	return promptMergedRepoActions(mergedRepos, ml, ol)
 }
 
 func (c *ReposCmd) runArchived(globals *CLI) error {
@@ -206,6 +211,8 @@ func (c *ReposCmd) runArchived(globals *CLI) error {
 		return nil
 	}
 	defer func() { _ = ml.Close() }()
+	ol := oplog.NewOrNil()
+	defer func() { _ = ol.Close() }()
 
 	var flags []string
 	if globals.DryRun {
@@ -240,7 +247,7 @@ func (c *ReposCmd) runArchived(globals *CLI) error {
 		return nil
 	}
 
-	return promptArchivedRepoActions(archived, ml)
+	return promptArchivedRepoActions(archived, ml, ol)
 }
 
 func printMergedRepos(mergedRepos []repos.MergedBranchRepo) {
@@ -262,7 +269,7 @@ func printMergedRepos(mergedRepos []repos.MergedBranchRepo) {
 	fmt.Println()
 }
 
-func promptMergedRepoActions(mergedRepos []repos.MergedBranchRepo, ml *metrics.Logger) error {
+func promptMergedRepoActions(mergedRepos []repos.MergedBranchRepo, ml *metrics.Logger, ol *oplog.Logger) error {
 	// Filter to only switchable repos (clean working tree).
 	var switchable []repos.MergedBranchRepo
 	for _, r := range mergedRepos {
@@ -339,13 +346,28 @@ func promptMergedRepoActions(mergedRepos []repos.MergedBranchRepo, ml *metrics.L
 			fmt.Printf("  %s\n", red.Sprintf("Failed to switch %s: %v", r.Name, err))
 			continue
 		}
+		_ = ol.Log(oplog.Operation{
+			Type:           oplog.OpSwitchBranch,
+			RepoPath:       r.Path,
+			Branch:         r.DefaultBranch,
+			PreviousBranch: r.CurrentBranch,
+		})
 		fmt.Printf("  %s\n", green.Sprintf("Switched %s to %s", r.Name, r.DefaultBranch))
 		switched++
 
 		if deleteBranch {
+			sha, _ := git.RevParse(r.Path, r.CurrentBranch)
+			remoteURL, _ := git.RemoteURL(r.Path, "origin")
 			if err := git.DeleteLocalBranch(r.Path, r.CurrentBranch, false); err != nil {
 				fmt.Printf("  %s\n", red.Sprintf("Failed to delete branch %s in %s: %v", r.CurrentBranch, r.Name, err))
 			} else {
+				_ = ol.Log(oplog.Operation{
+					Type:      oplog.OpDeleteBranch,
+					RepoPath:  r.Path,
+					Branch:    r.CurrentBranch,
+					CommitSHA: sha,
+					RemoteURL: remoteURL,
+				})
 				fmt.Printf("  %s\n", green.Sprintf("Deleted branch %s in %s", r.CurrentBranch, r.Name))
 			}
 		}
@@ -374,7 +396,7 @@ func printArchivedRepos(archived []repos.ArchivedRepo) {
 	fmt.Println()
 }
 
-func promptArchivedRepoActions(archived []repos.ArchivedRepo, ml *metrics.Logger) error {
+func promptArchivedRepoActions(archived []repos.ArchivedRepo, ml *metrics.Logger, ol *oplog.Logger) error {
 	red := color.New(color.FgRed)
 	green := color.New(color.FgGreen)
 	bold := color.New(color.Bold)
@@ -432,11 +454,17 @@ func promptArchivedRepoActions(archived []repos.ArchivedRepo, ml *metrics.Logger
 			continue
 		}
 
+		remoteURL, _ := git.RemoteURL(r.Path, "origin")
 		fmt.Printf("Removing %s/%s at %s...\n", r.Owner, r.Repo, r.Path)
 		if err := os.RemoveAll(r.Path); err != nil {
 			fmt.Printf("  %s\n", red.Sprintf("Failed to remove %s: %v", r.Path, err))
 			continue
 		}
+		_ = ol.Log(oplog.Operation{
+			Type:      oplog.OpDeleteRepo,
+			Path:      r.Path,
+			RemoteURL: remoteURL,
+		})
 		fmt.Printf("  %s\n", green.Sprintf("Removed %s", r.Path))
 		removed++
 	}

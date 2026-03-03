@@ -194,6 +194,135 @@ func TestMergedBranch_LabelWithRemote(t *testing.T) {
 	}
 }
 
+func TestMergedBranch_LabelWithPRInfo(t *testing.T) {
+	mb := branches.MergedBranch{
+		RepoName:    "my-repo",
+		Branch:      "feature/test",
+		HasRemote:   true,
+		PRNumber:    42,
+		MergeMethod: "squash",
+	}
+	want := "my-repo: feature/test (backed up remotely) [squash-merged PR #42]"
+	if got := mb.Label(); got != want {
+		t.Errorf("Label() = %q, want %q", got, want)
+	}
+}
+
+func TestMergedBranch_LabelWithPRNoMethod(t *testing.T) {
+	mb := branches.MergedBranch{
+		RepoName: "my-repo",
+		Branch:   "feature/test",
+		PRNumber: 7,
+	}
+	want := "my-repo: feature/test [merged PR #7]"
+	if got := mb.Label(); got != want {
+		t.Errorf("Label() = %q, want %q", got, want)
+	}
+}
+
+func TestMergedBranch_LabelForceDeleteNoPR(t *testing.T) {
+	mb := branches.MergedBranch{
+		RepoName:    "my-repo",
+		Branch:      "feature/test",
+		ForceDelete: true,
+	}
+	want := "my-repo: feature/test [merged]"
+	if got := mb.Label(); got != want {
+		t.Errorf("Label() = %q, want %q", got, want)
+	}
+}
+
+// mockMergeMethodResolver returns preconfigured merge methods by commit SHA.
+type mockMergeMethodResolver struct {
+	methods map[string]string // mergeCommitSHA -> method
+	calls   int
+}
+
+func (m *mockMergeMethodResolver) PRMergeMethod(_, _, mergeCommitSHA string) (string, error) {
+	m.calls++
+	if method, ok := m.methods[mergeCommitSHA]; ok {
+		return method, nil
+	}
+	return "", nil
+}
+
+func TestEnrichMergeMethod_NilResolver(t *testing.T) {
+	input := []branches.MergedBranch{{Branch: "test", MergeCommitSHA: "abc123"}}
+	result := branches.EnrichMergeMethod(input, nil, 1)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(result))
+	}
+	if result[0].MergeMethod != "" {
+		t.Error("expected empty MergeMethod with nil resolver")
+	}
+}
+
+func TestEnrichMergeMethod_SkipsNoMergeCommitSHA(t *testing.T) {
+	mock := &mockMergeMethodResolver{methods: map[string]string{}}
+	input := []branches.MergedBranch{
+		{Branch: "no-sha", MergeCommitSHA: ""},
+		{Branch: "also-no-sha"},
+	}
+	result := branches.EnrichMergeMethod(input, mock, 1)
+	if mock.calls != 0 {
+		t.Errorf("expected 0 API calls, got %d", mock.calls)
+	}
+	for _, m := range result {
+		if m.MergeMethod != "" {
+			t.Errorf("expected empty MergeMethod for %s", m.Branch)
+		}
+	}
+}
+
+func TestEnrichMergeMethod_EnrichesWithRemote(t *testing.T) {
+	// Create a git repo with a GitHub-style remote.
+	repo := helpers.NewTestRepo(t, "enrich-merge")
+	repo.AddRemote("origin", "https://github.com/owner/test-repo.git")
+
+	mock := &mockMergeMethodResolver{
+		methods: map[string]string{
+			"abc123": "squash",
+			"def456": "merge",
+		},
+	}
+
+	input := []branches.MergedBranch{
+		{
+			RepoPath:       repo.Path,
+			RepoName:       "test-repo",
+			Branch:         "feat-a",
+			MergeCommitSHA: "abc123",
+		},
+		{
+			RepoPath:       repo.Path,
+			RepoName:       "test-repo",
+			Branch:         "feat-b",
+			MergeCommitSHA: "def456",
+		},
+		{
+			RepoPath:       repo.Path,
+			RepoName:       "test-repo",
+			Branch:         "feat-c",
+			MergeCommitSHA: "", // should be skipped
+		},
+	}
+
+	result := branches.EnrichMergeMethod(input, mock, 1)
+
+	if mock.calls != 2 {
+		t.Errorf("expected 2 API calls, got %d", mock.calls)
+	}
+	if result[0].MergeMethod != "squash" {
+		t.Errorf("expected squash for feat-a, got %q", result[0].MergeMethod)
+	}
+	if result[1].MergeMethod != "merge" {
+		t.Errorf("expected merge for feat-b, got %q", result[1].MergeMethod)
+	}
+	if result[2].MergeMethod != "" {
+		t.Errorf("expected empty for feat-c, got %q", result[2].MergeMethod)
+	}
+}
+
 func TestFindMerged_HasRemoteField(t *testing.T) {
 	// Create a bare remote and a clone with a proper origin.
 	origin := helpers.NewTestRepo(t, "remote-merged-origin")

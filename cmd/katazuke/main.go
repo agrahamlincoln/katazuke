@@ -17,6 +17,7 @@ import (
 	ghclient "github.com/agrahamlincoln/katazuke/internal/github"
 	"github.com/agrahamlincoln/katazuke/internal/merge"
 	"github.com/agrahamlincoln/katazuke/internal/metrics"
+	"github.com/agrahamlincoln/katazuke/internal/oplog"
 	"github.com/agrahamlincoln/katazuke/internal/parallel"
 	"github.com/agrahamlincoln/katazuke/internal/scanner"
 	"github.com/agrahamlincoln/katazuke/pkg/git"
@@ -38,6 +39,7 @@ type CLI struct {
 	Repos    ReposCmd    `cmd:"" help:"Manage repository checkouts."`
 	Audit    AuditCmd    `cmd:"" help:"Run full workspace audit."`
 	Sync     SyncCmd     `cmd:"" help:"Sync all repositories."`
+	Log      LogCmd      `cmd:"" help:"Show recent operations."`
 	Version  VersionCmd  `cmd:"" help:"Show version information."`
 }
 
@@ -73,11 +75,13 @@ func (c *BranchesCmd) runMerged(globals *CLI) error {
 		enableVerboseLogging()
 	}
 
-	// Metrics are best-effort local telemetry for improving katazuke.
-	// Logging errors are intentionally discarded because metrics must never
-	// interrupt the user's workflow or cause a command to fail.
+	// Metrics and operation log are best-effort. Logging errors are
+	// intentionally discarded because they must never interrupt the
+	// user's workflow or cause a command to fail.
 	ml := metrics.NewOrNil()
 	defer func() { _ = ml.Close() }()
+	ol := oplog.NewOrNil()
+	defer func() { _ = ol.Close() }()
 
 	var flags []string
 	if globals.DryRun {
@@ -119,6 +123,9 @@ func (c *BranchesCmd) runMerged(globals *CLI) error {
 	}
 	_ = ml.LogPerf(len(repos), int(time.Since(scanStart).Milliseconds()))
 
+	// Enrich GitHub-detected branches with merge method (merge vs squash).
+	merged = branches.EnrichMergeMethod(merged, gh, workers)
+
 	if len(merged) == 0 {
 		fmt.Println("No merged branches found.")
 		return nil
@@ -157,7 +164,7 @@ func (c *BranchesCmd) runMerged(globals *CLI) error {
 		return err
 	}
 
-	return deleteSelectedBranches(selected, deleteRemote)
+	return deleteSelectedBranches(selected, deleteRemote, ol)
 }
 
 // mergedSummaryThreshold is the number of branches above which the
@@ -194,10 +201,32 @@ func printMergedSummary(merged []branches.MergedBranch) {
 				fmt.Printf("  %s\n", bold.Sprint(m.RepoName))
 			}
 			age := formatAge(m.LastCommit)
-			fmt.Printf("    %s  %s\n", m.Branch, dim.Sprintf("(%s)", age))
+			prInfo := mergedPRSuffix(m)
+			fmt.Printf("    %s  %s\n", m.Branch, dim.Sprintf("(%s%s)", age, prInfo))
 		}
 	}
 	fmt.Println()
+}
+
+// mergedPRSuffix returns a formatted string with PR info for display in the
+// merged branch summary. Returns "" if no PR info is available.
+func mergedPRSuffix(m branches.MergedBranch) string {
+	if m.PRNumber == 0 {
+		// GitHub-detected branches (ForceDelete) with no PR info still
+		// deserve a hint; git-detected merges need no suffix.
+		if m.ForceDelete {
+			return ", merged"
+		}
+		return ""
+	}
+	method := ""
+	if m.MergeMethod != "" {
+		method = m.MergeMethod + "-"
+	}
+	if !m.PRMergedAt.IsZero() {
+		return fmt.Sprintf(", PR #%d %smerged %s", m.PRNumber, method, m.PRMergedAt.Format("Jan 2"))
+	}
+	return fmt.Sprintf(", PR #%d %smerged", m.PRNumber, method)
 }
 
 func promptForDeletion(merged []branches.MergedBranch) ([]branches.MergedBranch, error) {
@@ -275,8 +304,9 @@ type branchToDelete struct {
 
 // deleteBranches deletes branches locally and optionally their remote
 // counterparts. Each branch's forceLocal field controls whether
-// git branch -D (force) is used for that specific branch.
-func deleteBranches(toDelete []branchToDelete, deleteRemote bool) error {
+// git branch -D (force) is used for that specific branch. Successful
+// operations are logged to the oplog with the branch SHA for recovery.
+func deleteBranches(toDelete []branchToDelete, deleteRemote bool, ol *oplog.Logger) error {
 	bold := color.New(color.Bold)
 	green := color.New(color.FgGreen)
 	yellow := color.New(color.FgYellow)
@@ -294,6 +324,14 @@ func deleteBranches(toDelete []branchToDelete, deleteRemote bool) error {
 
 		fmt.Print(clearLine)
 
+		// Capture SHA before deletion for audit recovery.
+		sha, err := git.RevParse(b.repoPath, b.branch)
+		if err != nil {
+			slog.Debug("could not capture SHA before deletion",
+				"repo", b.repoName, "branch", b.branch, "error", err)
+		}
+		remoteURL, _ := git.RemoteURL(b.repoPath, "origin")
+
 		slog.Debug("deleting branch", "repo", b.repoName, "branch", b.branch)
 		if err := git.DeleteLocalBranch(b.repoPath, b.branch, b.forceLocal); err != nil {
 			fmt.Printf("  %s %s: %s (%v)\n", red.Sprint("[fail]"), b.repoName, b.branch, err)
@@ -305,6 +343,7 @@ func deleteBranches(toDelete []branchToDelete, deleteRemote bool) error {
 		}
 		fmt.Printf("  %s %s: %s\n", green.Sprint("[deleted]"), b.repoName, b.branch)
 
+		deletedRemote := false
 		if deleteRemote && b.hasRemote && b.canDeleteRemote {
 			if err := git.DeleteRemoteBranch(b.repoPath, "origin", b.branch); err != nil {
 				if isRemoteRefNotFound(err) {
@@ -314,9 +353,22 @@ func deleteBranches(toDelete []branchToDelete, deleteRemote bool) error {
 					remoteFailed = append(remoteFailed, label)
 				}
 			} else {
+				deletedRemote = true
 				fmt.Printf("  %s %s: %s (remote)\n", green.Sprint("[deleted]"), b.repoName, b.branch)
 			}
 		}
+
+		// Log after successful local deletion so the oplog only records
+		// operations that actually happened.
+		_ = ol.Log(oplog.Operation{
+			Type:          oplog.OpDeleteBranch,
+			RepoPath:      b.repoPath,
+			Branch:        b.branch,
+			CommitSHA:     sha,
+			RemoteURL:     remoteURL,
+			WasForce:      b.forceLocal,
+			DeletedRemote: deletedRemote,
+		})
 
 		if remaining > 0 {
 			fmt.Printf("%s  %s %d remaining...", clearLine, dim.Sprintf("[%d/%d]", completed, total), remaining)
@@ -358,7 +410,7 @@ func deleteBranches(toDelete []branchToDelete, deleteRemote bool) error {
 	return nil
 }
 
-func deleteSelectedBranches(selected []branches.MergedBranch, deleteRemote bool) error {
+func deleteSelectedBranches(selected []branches.MergedBranch, deleteRemote bool, ol *oplog.Logger) error {
 	toDelete := make([]branchToDelete, len(selected))
 	for i, m := range selected {
 		toDelete[i] = branchToDelete{
@@ -370,7 +422,7 @@ func deleteSelectedBranches(selected []branches.MergedBranch, deleteRemote bool)
 			forceLocal:      m.ForceDelete,
 		}
 	}
-	return deleteBranches(toDelete, deleteRemote)
+	return deleteBranches(toDelete, deleteRemote, ol)
 }
 
 func (c *BranchesCmd) runStale(globals *CLI) error {
@@ -378,9 +430,11 @@ func (c *BranchesCmd) runStale(globals *CLI) error {
 		enableVerboseLogging()
 	}
 
-	// Metrics logging errors are discarded; see comment in runMerged.
+	// Metrics and oplog errors are discarded; see comment in runMerged.
 	ml := metrics.NewOrNil()
 	defer func() { _ = ml.Close() }()
+	ol := oplog.NewOrNil()
+	defer func() { _ = ol.Close() }()
 
 	var flags []string
 	if globals.DryRun {
@@ -445,7 +499,7 @@ func (c *BranchesCmd) runStale(globals *CLI) error {
 		return nil
 	}
 
-	return promptAndExecuteStaleActions(stale, ml)
+	return promptAndExecuteStaleActions(stale, ml, ol)
 }
 
 // prCheckResult pairs a stale branch with the outcome of its PR status check.
@@ -612,7 +666,7 @@ func progressPrinter() func(completed, total int) {
 
 // promptAndExecuteStaleActions categorizes stale branches into safety tiers,
 // presents a multi-select per tier, and deletes the selected branches.
-func promptAndExecuteStaleActions(stale []branches.StaleBranch, ml *metrics.Logger) error {
+func promptAndExecuteStaleActions(stale []branches.StaleBranch, ml *metrics.Logger, ol *oplog.Logger) error {
 	safe, automation, review := categorizeStaleBranches(stale)
 
 	tiers := []struct {
@@ -671,7 +725,7 @@ func promptAndExecuteStaleActions(stale []branches.StaleBranch, ml *metrics.Logg
 		return err
 	}
 
-	return executeStaleDeletes(selected, deleteRemote)
+	return executeStaleDeletes(selected, deleteRemote, ol)
 }
 
 // categorizeStaleBranches groups branches into safety tiers for the
@@ -797,7 +851,7 @@ func safeToDeleteRemote(s branches.StaleBranch) bool {
 
 // executeStaleDeletes deletes the selected stale branches locally, and
 // optionally their remote counterparts where safe.
-func executeStaleDeletes(selected []branches.StaleBranch, deleteRemote bool) error {
+func executeStaleDeletes(selected []branches.StaleBranch, deleteRemote bool, ol *oplog.Logger) error {
 	toDelete := make([]branchToDelete, len(selected))
 	for i, s := range selected {
 		toDelete[i] = branchToDelete{
@@ -809,7 +863,7 @@ func executeStaleDeletes(selected []branches.StaleBranch, deleteRemote bool) err
 			forceLocal:      true,
 		}
 	}
-	return deleteBranches(toDelete, deleteRemote)
+	return deleteBranches(toDelete, deleteRemote, ol)
 }
 
 func truncate(s string, maxLen int) string {

@@ -92,20 +92,22 @@ const (
 
 // prSearchResponse holds the response from the GitHub pulls API.
 type prSearchResponse struct {
-	Number   int    `json:"number"`
-	State    string `json:"state"`
-	MergedAt string `json:"merged_at"`
-	Head     struct {
+	Number         int    `json:"number"`
+	State          string `json:"state"`
+	MergedAt       string `json:"merged_at"`
+	MergeCommitSHA string `json:"merge_commit_sha"`
+	Head           struct {
 		SHA string `json:"sha"`
 	} `json:"head"`
 }
 
 // PRInfo contains detailed information about a pull request for a branch.
 type PRInfo struct {
-	Number   int
-	State    PRState
-	MergedAt time.Time
-	HeadSHA  string
+	Number         int
+	State          PRState
+	MergedAt       time.Time
+	HeadSHA        string
+	MergeCommitSHA string
 }
 
 // BranchPRInfo returns detailed PR information for a branch. When no PR exists,
@@ -131,8 +133,9 @@ func (c *Client) BranchPRInfo(owner, repo, branch string) (*PRInfo, error) {
 
 	pr := prs[0]
 	info := &PRInfo{
-		Number:  pr.Number,
-		HeadSHA: pr.Head.SHA,
+		Number:         pr.Number,
+		HeadSHA:        pr.Head.SHA,
+		MergeCommitSHA: pr.MergeCommitSHA,
 	}
 
 	switch {
@@ -148,6 +151,37 @@ func (c *Client) BranchPRInfo(owner, repo, branch string) (*PRInfo, error) {
 	}
 
 	return info, nil
+}
+
+// commitResponse holds the fields needed to determine merge method.
+type commitResponse struct {
+	Parents []struct {
+		SHA string `json:"sha"`
+	} `json:"parents"`
+}
+
+// PRMergeMethod determines how a PR was merged by inspecting the merge commit.
+// Returns "merge" for merge commits (2+ parents). Returns "squash" for
+// single-parent commits, which includes both squash-merges and rebase-merges
+// (indistinguishable without additional heuristics).
+func (c *Client) PRMergeMethod(owner, repo, mergeCommitSHA string) (string, error) {
+	if c.rest == nil {
+		return "", fmt.Errorf("no GitHub API client available")
+	}
+	if mergeCommitSHA == "" {
+		return "", nil
+	}
+
+	var resp commitResponse
+	err := c.rest.Get(fmt.Sprintf("repos/%s/%s/commits/%s", owner, repo, mergeCommitSHA), &resp)
+	if err != nil {
+		return "", fmt.Errorf("querying commit %s for %s/%s: %w", mergeCommitSHA, owner, repo, err)
+	}
+
+	if len(resp.Parents) >= 2 {
+		return "merge", nil
+	}
+	return "squash", nil
 }
 
 // sshRemoteRe matches SSH-style GitHub remote URLs:

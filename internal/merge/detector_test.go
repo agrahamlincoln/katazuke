@@ -3,6 +3,7 @@ package merge_test
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/agrahamlincoln/katazuke/internal/github"
 	"github.com/agrahamlincoln/katazuke/internal/merge"
@@ -268,6 +269,46 @@ func TestMergedBranches_PassesCorrectBranchNames(t *testing.T) {
 	// Remote URL should be resolved exactly once (hoisted out of loop).
 	if gitMock.remoteURLCalls != 1 {
 		t.Errorf("expected 1 RemoteURL call, got %d", gitMock.remoteURLCalls)
+	}
+}
+
+func TestMergedBranches_ThreadsPRInfo(t *testing.T) {
+	gitMock := &mockGitChecker{
+		mergedBranches: []string{},
+		remoteURL:      "https://github.com/owner/repo.git",
+	}
+	prMock := &branchAwarePRMock{
+		states: map[string]github.PRInfo{
+			"squash-merged": {
+				State:          github.PRStateMerged,
+				Number:         42,
+				MergedAt:       time.Date(2026, 1, 5, 12, 0, 0, 0, time.UTC),
+				MergeCommitSHA: "abc123deadbeef",
+			},
+		},
+	}
+	d := merge.NewDetector(gitMock, prMock)
+
+	all := []string{"squash-merged"}
+	result, err := d.MergedBranches("/repo", "main", all)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(result))
+	}
+	if result[0].PRNumber != 42 {
+		t.Errorf("expected PRNumber 42, got %d", result[0].PRNumber)
+	}
+	if result[0].PRMergedAt.IsZero() {
+		t.Error("expected PRMergedAt to be set")
+	}
+	if result[0].Method != merge.DetectedByGitHub {
+		t.Error("expected DetectedByGitHub")
+	}
+	if result[0].MergeCommitSHA != "abc123deadbeef" {
+		t.Errorf("expected MergeCommitSHA abc123deadbeef, got %q", result[0].MergeCommitSHA)
 	}
 }
 

@@ -6,6 +6,7 @@ package merge
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/agrahamlincoln/katazuke/internal/github"
 )
@@ -26,8 +27,11 @@ const (
 // as merged. Callers use the method to decide whether force-deletion is
 // needed (GitHub-detected branches require git branch -D).
 type DetectedBranch struct {
-	Name   string
-	Method DetectionMethod
+	Name           string
+	Method         DetectionMethod
+	PRNumber       int       // 0 if not available (git-detected)
+	PRMergedAt     time.Time // zero if not available
+	MergeCommitSHA string    // from GitHub API, used for merge method detection
 }
 
 // GitChecker defines the git operations needed for merge detection.
@@ -121,8 +125,15 @@ func (d *Detector) MergedBranches(repoPath, base string, allBranches []string) (
 		if gitMergedSet[branch] {
 			continue
 		}
-		if d.isPRMerged(owner, repo, branch) {
-			result = append(result, DetectedBranch{Name: branch, Method: DetectedByGitHub})
+		info, merged := d.isPRMerged(owner, repo, branch)
+		if merged {
+			result = append(result, DetectedBranch{
+				Name:           branch,
+				Method:         DetectedByGitHub,
+				PRNumber:       info.Number,
+				PRMergedAt:     info.MergedAt,
+				MergeCommitSHA: info.MergeCommitSHA,
+			})
 		}
 	}
 
@@ -148,16 +159,16 @@ func (d *Detector) resolveGitHubRepo(repoPath string) (owner, repo string, ok bo
 }
 
 // isPRMerged queries the GitHub API for the PR state of a single branch.
-// Returns true only if the PR was merged. Any error is logged and treated
-// as "not merged" (graceful degradation).
-func (d *Detector) isPRMerged(owner, repo, branch string) bool {
+// Returns the PRInfo and true only if the PR was merged. Any error is
+// logged and treated as "not merged" (graceful degradation).
+func (d *Detector) isPRMerged(owner, repo, branch string) (*github.PRInfo, bool) {
 	info, err := d.pr.BranchPRInfo(owner, repo, branch)
 	if err != nil {
 		slog.Debug("PR check failed, assuming not merged",
 			"repo", owner+"/"+repo, "branch", branch, "error", err)
-		return false
+		return nil, false
 	}
-	return info.State == github.PRStateMerged
+	return info, info.State == github.PRStateMerged
 }
 
 // checkPR queries the GitHub API for the PR state of a branch. Returns
@@ -168,5 +179,6 @@ func (d *Detector) checkPR(repoPath, branch string) bool {
 	if !ok {
 		return false
 	}
-	return d.isPRMerged(owner, repo, branch)
+	_, merged := d.isPRMerged(owner, repo, branch)
+	return merged
 }
