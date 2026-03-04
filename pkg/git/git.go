@@ -29,6 +29,13 @@ func run(repoPath string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// TopLevel returns the absolute path of the top-level directory of the git
+// repository containing the given path. Returns an error if the path is not
+// inside a git repository.
+func TopLevel(path string) (string, error) {
+	return run(path, "rev-parse", "--show-toplevel")
+}
+
 // IsRepo returns true if the given path is inside a git repository.
 func IsRepo(path string) bool {
 	// #nosec G204 - path is a filesystem path, not user input

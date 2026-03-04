@@ -33,6 +33,7 @@ var (
 type CLI struct {
 	DryRun      bool   `name:"dry-run" short:"n" help:"Show what would be done without making changes."`
 	Verbose     bool   `name:"verbose" short:"v" help:"Verbose output."`
+	Global      bool   `name:"global" short:"g" help:"Operate on all repositories instead of just the current one."`
 	ProjectsDir string `name:"projects-dir" short:"p" help:"Projects directory (default: from config file, or ~/projects)." default:"" env:"KATAZUKE_PROJECTS_DIR"`
 
 	Branches BranchesCmd `cmd:"" help:"Manage branches across repositories."`
@@ -98,23 +99,17 @@ func (c *BranchesCmd) runMerged(globals *CLI) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	projectsDir := resolveProjectsDir(globals.ProjectsDir, cfg)
-
-	slog.Debug("scanning for repositories", "dir", projectsDir)
-
 	scanStart := time.Now()
-	repos, err := scanner.Scan(projectsDir, scanner.Options{
-		ExcludePatterns: cfg.ExcludePatterns,
-	})
+	repos, isLocal, err := resolveRepos(globals, cfg)
 	if err != nil {
-		return fmt.Errorf("scanning repositories: %w", err)
+		return err
 	}
 
 	slog.Debug("found repositories", "count", len(repos))
 
 	workers := cfg.Workers
 	slog.Debug("using worker pool", "workers", workers)
-	fmt.Printf("Scanning %d repositories for merged branches...\n", len(repos))
+	printRepoCount("Scanning", len(repos), isLocal, " for merged branches...")
 
 	gh := ghclient.NewClient(cfg.GithubToken)
 	detector := merge.NewDetector(merge.RealGitChecker{}, gh)
@@ -452,28 +447,22 @@ func (c *BranchesCmd) runStale(globals *CLI) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	projectsDir := resolveProjectsDir(globals.ProjectsDir, cfg)
+	scanStart := time.Now()
+	repos, isLocal, err := resolveRepos(globals, cfg)
+	if err != nil {
+		return err
+	}
 
 	staleDays := c.StaleDays
 	if staleDays <= 0 {
 		staleDays = cfg.StaleThresholdDays
 	}
 
-	slog.Debug("scanning for repositories", "dir", projectsDir)
-
-	scanStart := time.Now()
-	repos, err := scanner.Scan(projectsDir, scanner.Options{
-		ExcludePatterns: cfg.ExcludePatterns,
-	})
-	if err != nil {
-		return fmt.Errorf("scanning repositories: %w", err)
-	}
-
 	slog.Debug("found repositories", "count", len(repos))
 
 	workers := cfg.Workers
 	slog.Debug("using worker pool", "workers", workers)
-	fmt.Printf("Scanning %d repositories for stale branches...\n", len(repos))
+	printRepoCount("Scanning", len(repos), isLocal, " for stale branches...")
 
 	gh := ghclient.NewClient(cfg.GithubToken)
 	detector := merge.NewDetector(merge.RealGitChecker{}, gh)
@@ -649,6 +638,16 @@ const maxCommitSummaryLen = 50
 // clearLine is the ANSI escape sequence to move the cursor to the start
 // of the line and erase its contents.
 const clearLine = "\r\033[2K"
+
+// printRepoCount prints a status line like "Scanning 42 repositories for merged branches..."
+// In local mode it always says "1 repository" instead of the count.
+func printRepoCount(verb string, count int, isLocal bool, suffix string) {
+	if isLocal {
+		fmt.Printf("%s 1 repository%s\n", verb, suffix)
+	} else {
+		fmt.Printf("%s %d repositories%s\n", verb, count, suffix)
+	}
+}
 
 // progressPrinter returns a callback that displays an inline progress
 // counter. The line is cleared when all items complete.
@@ -926,6 +925,33 @@ func resolveProjectsDir(cliValue string, cfg config.Config) string {
 		return config.ExpandHome(cliValue)
 	}
 	return cfg.ProjectsDir
+}
+
+// resolveRepos determines the set of repositories to operate on. When --global
+// is not set and the cwd is inside a git repo, it returns just that single repo
+// (local mode). Otherwise it falls back to scanning the full projects directory.
+func resolveRepos(globals *CLI, cfg config.Config) (repos []string, isLocal bool, err error) {
+	projectsDir := resolveProjectsDir(globals.ProjectsDir, cfg)
+
+	if !globals.Global {
+		cwd, wdErr := os.Getwd()
+		if wdErr == nil {
+			repoRoot, tlErr := git.TopLevel(cwd)
+			if tlErr == nil {
+				slog.Debug("detected local repo", "root", repoRoot)
+				return []string{repoRoot}, true, nil
+			}
+		}
+	}
+
+	slog.Debug("scanning for repositories", "dir", projectsDir)
+	repos, err = scanner.Scan(projectsDir, scanner.Options{
+		ExcludePatterns: cfg.ExcludePatterns,
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("scanning repositories: %w", err)
+	}
+	return repos, false, nil
 }
 
 // VersionCmd shows version information.

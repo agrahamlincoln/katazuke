@@ -11,6 +11,38 @@ import (
 	"github.com/agrahamlincoln/katazuke/test/helpers"
 )
 
+func TestTopLevel(t *testing.T) {
+	repo := helpers.NewTestRepo(t, "top-level")
+
+	got, err := git.TopLevel(repo.Path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != repo.Path {
+		t.Errorf("expected %q, got %q", repo.Path, got)
+	}
+
+	// A subdirectory should still return the repo root.
+	subdir := filepath.Join(repo.Path, "subdir")
+	if err := os.MkdirAll(subdir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	got, err = git.TopLevel(subdir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != repo.Path {
+		t.Errorf("expected %q from subdir, got %q", repo.Path, got)
+	}
+
+	// A non-repo directory should return an error.
+	nonRepo := t.TempDir()
+	_, err = git.TopLevel(nonRepo)
+	if err == nil {
+		t.Error("expected error for non-repo directory")
+	}
+}
+
 func TestIsRepo(t *testing.T) {
 	repo := helpers.NewTestRepo(t, "is-repo")
 	if !git.IsRepo(repo.Path) {

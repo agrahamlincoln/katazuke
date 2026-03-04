@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,7 +17,7 @@ import (
 	"github.com/agrahamlincoln/katazuke/internal/merge"
 	"github.com/agrahamlincoln/katazuke/internal/metrics"
 	"github.com/agrahamlincoln/katazuke/internal/oplog"
-	"github.com/agrahamlincoln/katazuke/internal/scanner"
+	"github.com/agrahamlincoln/katazuke/pkg/git"
 )
 
 // AuditCmd handles workspace auditing.
@@ -54,47 +53,47 @@ func (c *AuditCmd) runDashboard(globals *CLI) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	projectsDir := resolveProjectsDir(globals.ProjectsDir, cfg)
-
-	slog.Debug("scanning for repositories", "dir", projectsDir)
-
-	repos, err := scanner.Scan(projectsDir, scanner.Options{
-		ExcludePatterns: cfg.ExcludePatterns,
-	})
+	repos, isLocal, err := resolveRepos(globals, cfg)
 	if err != nil {
-		return fmt.Errorf("scanning repositories: %w", err)
+		return err
 	}
 
-	fmt.Printf("Auditing %s (%d repos)...\n", projectsDir, len(repos))
+	// projectsDir is only needed for workspace-wide operations.
+	var projectsDir string
+	if isLocal {
+		fmt.Printf("Auditing 1 repository...\n")
+	} else {
+		projectsDir = resolveProjectsDir(globals.ProjectsDir, cfg)
+		fmt.Printf("Auditing %s (%d repos)...\n", projectsDir, len(repos))
+	}
 
 	workers := cfg.Workers
 	staleDays := cfg.StaleThresholdDays
 
-	// Run three analysis sections concurrently.
+	// Run analysis sections concurrently. Non-git dir scanning is skipped
+	// in local mode because it is inherently workspace-scoped.
 	var healthResults []audit.RepoHealth
 	var branchResult audit.BranchSummary
 	var nonGitDirs []audit.NonRepoDir
 	var healthErr, branchErr, nonGitErr error
 
 	var wg sync.WaitGroup
-	wg.Add(3)
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		healthResults = audit.AnalyzeRepoHealth(repos, workers)
-	}()
+	})
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		branchResult, branchErr = analyzeBranches(repos, staleDays, workers)
-	}()
+	})
 
-	go func() {
-		defer wg.Done()
-		nonGitDirs, nonGitErr = audit.FindNonRepoDirs(projectsDir, audit.Options{
-			ExcludePatterns: cfg.ExcludePatterns,
-		}, workers)
-	}()
+	if !isLocal {
+		wg.Go(func() {
+			nonGitDirs, nonGitErr = audit.FindNonRepoDirs(projectsDir, audit.Options{
+				ExcludePatterns: cfg.ExcludePatterns,
+			}, workers)
+		})
+	}
 
 	wg.Wait()
 
@@ -336,6 +335,17 @@ func printDashboard(r audit.DashboardResult) {
 func (c *AuditCmd) runNonGit(globals *CLI) error {
 	if globals.Verbose {
 		enableVerboseLogging()
+	}
+
+	// --non-git is inherently workspace-scoped; it doesn't apply to a single repo.
+	if !globals.Global {
+		cwd, err := os.Getwd()
+		if err == nil {
+			if _, tlErr := git.TopLevel(cwd); tlErr == nil {
+				fmt.Println("The --non-git flag requires workspace-wide mode. Use --global to scan the full projects directory.")
+				return nil
+			}
+		}
 	}
 
 	ml := metrics.NewOrNil()

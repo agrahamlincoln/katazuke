@@ -12,7 +12,6 @@ import (
 	ghclient "github.com/agrahamlincoln/katazuke/internal/github"
 	"github.com/agrahamlincoln/katazuke/internal/merge"
 	"github.com/agrahamlincoln/katazuke/internal/metrics"
-	"github.com/agrahamlincoln/katazuke/internal/scanner"
 	"github.com/agrahamlincoln/katazuke/internal/sync"
 )
 
@@ -47,15 +46,9 @@ func (c *SyncCmd) Run(globals *CLI) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	projectsDir := resolveProjectsDir(globals.ProjectsDir, cfg)
-
-	fmt.Printf("Scanning %s for repositories...\n", projectsDir)
-
-	repoPaths, err := scanner.Scan(projectsDir, scanner.Options{
-		ExcludePatterns: cfg.ExcludePatterns,
-	})
+	repoPaths, isLocal, err := resolveRepos(globals, cfg)
 	if err != nil {
-		return fmt.Errorf("scanning repositories: %w", err)
+		return err
 	}
 
 	if len(repoPaths) == 0 {
@@ -84,7 +77,7 @@ func (c *SyncCmd) Run(globals *CLI) error {
 
 	workers := cfg.Workers
 	slog.Debug("using worker pool", "workers", workers)
-	fmt.Printf("Syncing %d repositories...\n\n", len(repoPaths))
+	printRepoCount("Syncing", len(repoPaths), isLocal, "...\n")
 
 	green := color.New(color.FgGreen)
 	yellow := color.New(color.FgYellow)
