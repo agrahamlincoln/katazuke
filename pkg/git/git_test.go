@@ -250,6 +250,7 @@ func setupRemotePair(t *testing.T, name string) (string, string) {
 // pushToRemote pushes a branch from a repo to a bare remote.
 func pushToRemote(t *testing.T, repoPath, remote, branch string) {
 	t.Helper()
+	// #nosec G204 - git command with controlled inputs in test code
 	cmd := exec.Command("git", "push", remote, branch)
 	cmd.Dir = repoPath
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -399,6 +400,7 @@ func TestMergeBase(t *testing.T) {
 
 // run is a test helper that runs git in the given dir.
 func run(repoPath string, args ...string) (string, error) {
+	// #nosec G204 - git command with controlled inputs in test code
 	cmd := exec.Command("git", args...)
 	cmd.Dir = repoPath
 	out, err := cmd.Output()
@@ -630,6 +632,73 @@ func TestCommitAuthors_NoUniqueCommits(t *testing.T) {
 	if len(authors) != 0 {
 		t.Errorf("expected no authors for branch with no unique commits, got %v", authors)
 	}
+}
+
+func TestConflictState(t *testing.T) {
+	t.Run("clean_repo", func(t *testing.T) {
+		repo := helpers.NewTestRepo(t, "conflict-clean")
+		if got := git.ConflictState(repo.Path); got != "" {
+			t.Errorf("expected empty string for clean repo, got %q", got)
+		}
+	})
+
+	t.Run("mid_rebase_merge_dir", func(t *testing.T) {
+		repo := helpers.NewTestRepo(t, "conflict-rebase-merge")
+		gitDir := filepath.Join(repo.Path, ".git")
+		if err := os.MkdirAll(filepath.Join(gitDir, "rebase-merge"), 0750); err != nil {
+			t.Fatal(err)
+		}
+		if got := git.ConflictState(repo.Path); got != "rebase" {
+			t.Errorf("expected %q, got %q", "rebase", got)
+		}
+	})
+
+	t.Run("mid_rebase_apply_dir", func(t *testing.T) {
+		repo := helpers.NewTestRepo(t, "conflict-rebase-apply")
+		gitDir := filepath.Join(repo.Path, ".git")
+		if err := os.MkdirAll(filepath.Join(gitDir, "rebase-apply"), 0750); err != nil {
+			t.Fatal(err)
+		}
+		if got := git.ConflictState(repo.Path); got != "rebase" {
+			t.Errorf("expected %q, got %q", "rebase", got)
+		}
+	})
+
+	t.Run("mid_merge", func(t *testing.T) {
+		repo := helpers.NewTestRepo(t, "conflict-merge")
+		gitDir := filepath.Join(repo.Path, ".git")
+		if err := os.WriteFile(filepath.Join(gitDir, "MERGE_HEAD"), []byte("abc123\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got := git.ConflictState(repo.Path); got != "merge" {
+			t.Errorf("expected %q, got %q", "merge", got)
+		}
+	})
+
+	t.Run("mid_cherry_pick", func(t *testing.T) {
+		repo := helpers.NewTestRepo(t, "conflict-cherry-pick")
+		gitDir := filepath.Join(repo.Path, ".git")
+		if err := os.WriteFile(filepath.Join(gitDir, "CHERRY_PICK_HEAD"), []byte("abc123\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got := git.ConflictState(repo.Path); got != "cherry-pick" {
+			t.Errorf("expected %q, got %q", "cherry-pick", got)
+		}
+	})
+
+	t.Run("rebase_takes_priority_over_merge", func(t *testing.T) {
+		repo := helpers.NewTestRepo(t, "conflict-priority")
+		gitDir := filepath.Join(repo.Path, ".git")
+		if err := os.MkdirAll(filepath.Join(gitDir, "rebase-merge"), 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(gitDir, "MERGE_HEAD"), []byte("abc123\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got := git.ConflictState(repo.Path); got != "rebase" {
+			t.Errorf("expected %q (rebase takes priority), got %q", "rebase", got)
+		}
+	})
 }
 
 func TestHasUpstream(t *testing.T) {

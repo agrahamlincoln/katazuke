@@ -59,6 +59,7 @@ func gitInit(t *testing.T, path string) {
 
 func gitRun(t *testing.T, dir string, args ...string) {
 	t.Helper()
+	// #nosec G204 - git command with controlled inputs in test code
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {

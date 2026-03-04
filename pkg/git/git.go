@@ -5,7 +5,9 @@ package git
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +15,7 @@ import (
 
 // run wraps git command execution with consistent error formatting and output trimming.
 func run(repoPath string, args ...string) (string, error) {
+	// #nosec G204 - all git args are controlled by internal callers
 	cmd := exec.Command("git", args...)
 	cmd.Dir = repoPath
 	out, err := cmd.Output()
@@ -28,6 +31,7 @@ func run(repoPath string, args ...string) (string, error) {
 
 // IsRepo returns true if the given path is inside a git repository.
 func IsRepo(path string) bool {
+	// #nosec G204 - path is a filesystem path, not user input
 	cmd := exec.Command("git", "-C", path, "rev-parse", "--git-dir")
 	return cmd.Run() == nil
 }
@@ -234,6 +238,7 @@ func MergeBase(repoPath string, ref1, ref2 string) (string, error) {
 // references. It returns the merge output, whether conflicts were detected, and any error.
 // This is a read-only operation that does not modify the working tree.
 func MergeTree(repoPath string, base, local, remote string) (string, bool, error) {
+	// #nosec G204 - git refs are controlled by internal callers
 	cmd := exec.Command("git", "merge-tree", base, local, remote)
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
@@ -334,6 +339,32 @@ func CommitAuthors(repoPath, branch, base string) ([]string, error) {
 func HasUpstream(repoPath, branch string) bool {
 	_, err := run(repoPath, "rev-parse", "--abbrev-ref", branch+"@{upstream}")
 	return err == nil
+}
+
+// ConflictState returns the type of in-progress operation in the repo, if any.
+// Returns "rebase", "merge", "cherry-pick", or "" if the repo is in a normal state.
+func ConflictState(repoPath string) string {
+	gitDir, err := run(repoPath, "rev-parse", "--git-dir")
+	if err != nil {
+		return ""
+	}
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(repoPath, gitDir)
+	}
+
+	if info, err := os.Stat(filepath.Join(gitDir, "rebase-merge")); err == nil && info.IsDir() {
+		return "rebase"
+	}
+	if info, err := os.Stat(filepath.Join(gitDir, "rebase-apply")); err == nil && info.IsDir() {
+		return "rebase"
+	}
+	if _, err := os.Stat(filepath.Join(gitDir, "MERGE_HEAD")); err == nil {
+		return "merge"
+	}
+	if _, err := os.Stat(filepath.Join(gitDir, "CHERRY_PICK_HEAD")); err == nil {
+		return "cherry-pick"
+	}
+	return ""
 }
 
 // splitNonEmpty splits a newline-separated string and returns non-empty lines.

@@ -154,6 +154,7 @@ func (r *TestRepo) Branches() []string {
 // directly (e.g., run("init"), run("add", "file.txt")) -- "git" is prepended.
 func (r *TestRepo) run(args ...string) {
 	r.t.Helper()
+	// #nosec G204 - git command with controlled inputs in test code
 	cmd := exec.Command("git", args...)
 	cmd.Dir = r.Path
 	if output, err := cmd.CombinedOutput(); err != nil {

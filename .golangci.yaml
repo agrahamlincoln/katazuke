@@ -35,6 +35,14 @@ linters:
     - prealloc
     - nilnil
 
+  exclusions:
+    rules:
+      # Internal packages named metrics, scanner, sync shadow stdlib names.
+      # Renaming them would be gratuitous -- the names are correct for their purpose.
+      - linters:
+          - revive
+        text: "avoid package names that conflict with Go standard library"
+
 linters-settings:
   govet:
     enable:
